@@ -78,12 +78,31 @@ mod tests {
     use super::*;
 
     fn new_packet() -> Packet {
-        Packet::new(PacketType::State, 1, 0, 0, 0, 0, 0, 0, 0, Bytes::new())
+        Packet::new(
+            PacketType::State,
+            1,
+            0,
+            12345,
+            246810,
+            40,
+            4096,
+            0,
+            0,
+            Bytes::new(),
+        )
     }
 
     #[test]
     fn into_bytes_test() {
         let packet = new_packet();
-        // TODO: assert_eq!(Bytes::from(packet).to_vec(), vec![]);
+        #[rustfmt::skip]
+        assert_eq!(
+            Bytes::from(packet).to_vec(),
+            vec![0x02 << 4 | 0x01, 0x00, 0x30, 0x39,
+                 0x00, 0x03, 0xc4, 0x1a,
+                 0x00, 0x00, 0x00, 0x28,
+                 0x00, 0x00, 0x10, 0x00,
+                 0x00, 0x00, 0x00, 0x00]
+        );
     }
 }
