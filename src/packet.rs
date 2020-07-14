@@ -173,11 +173,7 @@ impl TryFrom<Bytes> for Packet {
                 //     .into());
                 // }
             } else {
-                return Err(PacketParseError::InvalidExtension(
-                    0,
-                    "expected extension, but hit end of buffer",
-                )
-                .into());
+                return Err(PacketParseError::ExpectedExtension(0).into());
             }
         }
 
@@ -253,11 +249,7 @@ impl TryFrom<Bytes> for Packet {
             if bytes.has_remaining() {
                 extension_type = bytes.get_u8();
             } else {
-                return Err(PacketParseError::InvalidExtension(
-                    extension_number,
-                    "expected extension, but hit end of buffer",
-                )
-                .into());
+                return Err(PacketParseError::ExpectedExtension(extension_number).into());
             }
         }
 

@@ -20,4 +20,6 @@ pub enum PacketParseError {
     UnsupportedVersion(u8),
     #[error("packet extension {0} is invalid: {1}")]
     InvalidExtension(usize, &'static str),
+    #[error("expected extension {0}, but hit end of buffer")]
+    ExpectedExtension(usize),
 }
