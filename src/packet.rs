@@ -124,6 +124,8 @@ impl From<Packet> for Bytes {
     }
 }
 
+// TODO: May want to support holding onto unknown extensions, doesn't seem like a good idea to
+//       just throw away data
 impl TryFrom<Bytes> for Packet {
     type Error = Error;
 
