@@ -1,7 +1,7 @@
 use std::convert::TryFrom;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use num_enum::{IntoPrimitive, TryFromPrimitive};
+use num_enum::TryFromPrimitive;
 
 use crate::error::*;
 
@@ -10,7 +10,7 @@ const PACKET_HEADER_LEN: usize = 20;
 
 /// See http://bittorrent.org/beps/bep_0029.html#type
 #[repr(u8)]
-#[derive(Debug, Copy, Clone, IntoPrimitive, TryFromPrimitive)]
+#[derive(Debug, Copy, Clone, TryFromPrimitive)]
 enum PacketType {
     Data = 0,
     Fin = 1,
@@ -20,7 +20,7 @@ enum PacketType {
 }
 
 /// See http://bittorrent.org/beps/bep_0029.html#extension
-#[derive(Debug, Copy, Clone, IntoPrimitive, TryFromPrimitive)]
+#[derive(Debug, Copy, Clone, TryFromPrimitive)]
 #[repr(u8)]
 enum ExtensionType {
     None = 0,
@@ -97,9 +97,9 @@ impl From<Packet> for Bytes {
         let mut result = BytesMut::with_capacity(packet_length);
         result.put_u8((packet.packet_type as u8) << 4 | packet.version);
         if packet.extensions.is_empty() {
-            result.put_u8(ExtensionType::None.into());
+            result.put_u8(ExtensionType::None as u8);
         } else {
-            result.put_u8(packet.extensions[0].extension_type.into());
+            result.put_u8(packet.extensions[0].extension_type as u8);
         }
         result.put_u16(packet.connection_id);
         result.put_u32(packet.timestamp_micros);
@@ -109,7 +109,7 @@ impl From<Packet> for Bytes {
         result.put_u16(packet.ack_number);
         // TODO: Do we need to think about padding?
         for extension in packet.extensions {
-            result.put_u8(extension.extension_type.into());
+            result.put_u8(extension.extension_type as u8);
             result.put_u8(extension.data.len() as u8);
             result.put(extension.data);
         }
@@ -127,14 +127,8 @@ impl TryFrom<Bytes> for Packet {
         }
 
         let type_and_version = bytes.get_u8();
-        let packet_type = match type_and_version >> 4 {
-            t if t == PacketType::Data as u8 => PacketType::Data,
-            t if t == PacketType::Fin as u8 => PacketType::Fin,
-            t if t == PacketType::State as u8 => PacketType::State,
-            t if t == PacketType::Reset as u8 => PacketType::Reset,
-            t if t == PacketType::Syn as u8 => PacketType::Syn,
-            t => return Err(PacketParseError::InvalidType(t).into()),
-        };
+        let packet_type = PacketType::try_from(type_and_version >> 4)
+            .map_err(|_| PacketParseError::InvalidType(type_and_version >> 4))?;
 
         let version = match type_and_version & 0x0F {
             1 => 1,
