@@ -1,4 +1,4 @@
-pub(crate) mod error;
+pub mod error;
 mod packet;
 mod socket;
 
