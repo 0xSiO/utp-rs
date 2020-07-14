@@ -18,8 +18,20 @@ pub enum PacketParseError {
     InvalidType(u8),
     #[error("unsupported packet version: {0}")]
     UnsupportedVersion(u8),
-    #[error("packet extension {0} is invalid: {1}")]
-    InvalidExtension(usize, &'static str),
     #[error("expected extension {0}, but hit end of buffer")]
     ExpectedExtension(usize),
+    #[error("extension {index} requires at least {expected} bytes, found {actual}")]
+    ExtensionTooSmall {
+        index: usize,
+        expected: u8,
+        actual: u8,
+    },
+    #[error(
+        "extension {index}'s length ({length}) exceeds number of remaining bytes ({remaining})'"
+    )]
+    ExtensionLengthTooLarge {
+        index: usize,
+        length: u8,
+        remaining: usize,
+    },
 }

@@ -158,7 +158,6 @@ impl TryFrom<Bytes> for Packet {
         // Consume the type if there's an actual extension
         if first_extension_type != ExtensionType::None as u8 {
             if bytes.has_remaining() {
-                bytes.advance(1);
                 // NOTE: The spec indicates that the first byte of an extension should be non-zero,
                 //       as a zero byte terminates the list. In practice, however, a zero first
                 //       byte in the extension list with a nonzero byte for the first extension
@@ -172,6 +171,7 @@ impl TryFrom<Bytes> for Packet {
                 //     )
                 //     .into());
                 // }
+                bytes.advance(1);
             } else {
                 return Err(PacketParseError::ExpectedExtension(0).into());
             }
@@ -185,13 +185,7 @@ impl TryFrom<Bytes> for Packet {
                     // NOTE: The spec indicates that the length for a selective ack extension must
                     // be at least 4, but in practice I've seen lengths of 2 or 3, so this
                     // apparently isn't enforced. I'll at least require a length.
-                    if bytes.remaining() < 1 {
-                        return Err(PacketParseError::InvalidExtension(
-                            extension_number,
-                            "extensions require at least 2 bytes: header (1) and length (1)",
-                        )
-                        .into());
-                    }
+                    //
                     // if bytes.remaining() < 5 {
                     //     return Err(PacketParseError::InvalidExtension(
                     //         extension_number,
@@ -199,6 +193,14 @@ impl TryFrom<Bytes> for Packet {
                     //     )
                     //     .into());
                     // }
+                    if bytes.remaining() < 1 {
+                        return Err(PacketParseError::ExtensionTooSmall {
+                            index: extension_number,
+                            expected: 2,
+                            actual: 1,
+                        }
+                        .into());
+                    }
 
                     let length = bytes.get_u8();
 
@@ -214,10 +216,11 @@ impl TryFrom<Bytes> for Packet {
                     // }
 
                     if bytes.remaining() < length as usize {
-                        return Err(PacketParseError::InvalidExtension(
-                            extension_number,
-                            "length exceeds number of remaining bytes",
-                        )
+                        return Err(PacketParseError::ExtensionLengthTooLarge {
+                            index: extension_number,
+                            length,
+                            remaining: bytes.remaining(),
+                        }
                         .into());
                     }
 
@@ -227,19 +230,21 @@ impl TryFrom<Bytes> for Packet {
                 Err(_) => {
                     // Unknown extension, just skip it
                     if bytes.remaining() < 1 {
-                        return Err(PacketParseError::InvalidExtension(
-                            extension_number,
-                            "extensions require at least 2 bytes: header (1) and length (1)",
-                        )
+                        return Err(PacketParseError::ExtensionTooSmall {
+                            index: extension_number,
+                            expected: 2,
+                            actual: 1,
+                        }
                         .into());
                     }
 
                     let length = bytes.get_u8();
                     if bytes.remaining() < length as usize {
-                        return Err(PacketParseError::InvalidExtension(
-                            extension_number,
-                            "length exceeds number of remaining bytes",
-                        )
+                        return Err(PacketParseError::ExtensionLengthTooLarge {
+                            index: extension_number,
+                            length,
+                            remaining: bytes.remaining(),
+                        }
                         .into());
                     }
                     let _ = bytes.split_to(length as usize);
