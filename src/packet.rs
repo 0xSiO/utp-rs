@@ -153,19 +153,24 @@ impl TryFrom<Bytes> for Packet {
         let mut extensions = vec![];
         let mut extension_number = 0;
         let mut extension_type = first_extension_type;
+
+        // Consume the type if there's an actual extension
+        if extension_type != ExtensionType::None as u8 {
+            bytes.advance(1);
+        }
+
         loop {
             match ExtensionType::try_from(extension_type) {
                 Ok(ExtensionType::None) => break,
                 Ok(ExtensionType::SelectiveAck) => {
-                    if bytes.remaining() < 6 {
+                    if bytes.remaining() < 5 {
                         return Err(PacketParseError::InvalidExtension(
                             extension_number,
-                            "selective ack extension needs at least 6 bytes",
+                            "selective ack extension needs at least 6 bytes: header (1), length (1), and bitfield (4)",
                         )
                         .into());
                     }
 
-                    bytes.advance(1);
                     let length = bytes.get_u8();
 
                     if length % 4 != 0 {
@@ -188,15 +193,14 @@ impl TryFrom<Bytes> for Packet {
                 }
                 Err(_) => {
                     // Unknown extension, just skip it
-                    if bytes.remaining() < 2 {
+                    if bytes.remaining() < 1 {
                         return Err(PacketParseError::InvalidExtension(
                             extension_number,
-                            "extensions require at least 2 bytes",
+                            "extensions require at least 2 bytes: header (1) and length (1)",
                         )
                         .into());
                     }
 
-                    bytes.advance(1);
                     let length = bytes.get_u8();
                     if bytes.remaining() < length as usize {
                         return Err(PacketParseError::InvalidExtension(
@@ -381,6 +385,40 @@ mod tests {
                   0x00, 0x00, 0x10, 0x00,
                   0x00, 0x00, 0x00, 0x00])).unwrap(),
             new_packet(vec![], Bytes::new())
+        );
+    }
+
+    #[test]
+    fn from_malformed_bytes_test() {
+        #[rustfmt::skip]
+        assert!(
+            Packet::try_from(Bytes::from_static(
+                // invalid length
+                &[0x02 << 4 | 0x01, 0x00, 0x30, 0x39,
+                  0x00, 0x00, 0x10, 0x00,
+                  0x00, 0x00, 0x00, 0x00])).is_err()
+        );
+
+        #[rustfmt::skip]
+        assert!(
+            Packet::try_from(Bytes::from_static(
+                // invalid type
+                &[0xff << 4 | 0x01, 0x00, 0x30, 0x39,
+                  0x00, 0x03, 0xc4, 0x1a,
+                  0x00, 0x00, 0x00, 0x28,
+                  0x00, 0x00, 0x10, 0x00,
+                  0x00, 0x00, 0x00, 0x00])).is_err()
+        );
+
+        #[rustfmt::skip]
+        assert!(
+            Packet::try_from(Bytes::from_static(
+                // invalid version
+                &[0x02 << 4 | 0xff, 0x00, 0x30, 0x39,
+                  0x00, 0x03, 0xc4, 0x1a,
+                  0x00, 0x00, 0x00, 0x28,
+                  0x00, 0x00, 0x10, 0x00,
+                  0x00, 0x00, 0x00, 0x00])).is_err()
         );
     }
 
