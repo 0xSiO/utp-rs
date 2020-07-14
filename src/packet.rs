@@ -158,14 +158,20 @@ impl TryFrom<Bytes> for Packet {
         // Consume the type if there's an actual extension
         if first_extension_type != ExtensionType::None as u8 {
             if bytes.has_remaining() {
-                let actual_first_extension_type = bytes.get_u8();
-                if first_extension_type != actual_first_extension_type {
-                    return Err(PacketParseError::InvalidExtension(
-                        0,
-                        "extension type doesn't agree with advertised first extension type",
-                    )
-                    .into());
-                }
+                bytes.advance(1);
+                // NOTE: The spec indicates that the first byte of an extension should be non-zero,
+                //       as a zero byte terminates the list. In practice, however, a zero first
+                //       byte in the extension list with a nonzero byte for the first extension
+                //       type (given in the header) is just ignored.
+                //
+                // let actual_first_extension_type = bytes.get_u8();
+                // if first_extension_type != actual_first_extension_type {
+                //     return Err(PacketParseError::InvalidExtension(
+                //         0,
+                //         "extension type doesn't agree with advertised first extension type",
+                //     )
+                //     .into());
+                // }
             } else {
                 return Err(PacketParseError::InvalidExtension(
                     0,
@@ -180,23 +186,37 @@ impl TryFrom<Bytes> for Packet {
             match ExtensionType::try_from(extension_type) {
                 Ok(ExtensionType::None) => break,
                 Ok(ExtensionType::SelectiveAck) => {
-                    if bytes.remaining() < 5 {
+                    // NOTE: The spec indicates that the length for a selective ack extension must
+                    // be at least 4, but in practice I've seen lengths of 2 or 3, so this
+                    // apparently isn't enforced. I'll at least require a length.
+                    if bytes.remaining() < 1 {
                         return Err(PacketParseError::InvalidExtension(
                             extension_number,
-                            "selective ack extension needs at least 6 bytes: header (1), length (1), and bitfield (4)",
+                            "extensions require at least 2 bytes: header (1) and length (1)",
                         )
                         .into());
                     }
+                    // if bytes.remaining() < 5 {
+                    //     return Err(PacketParseError::InvalidExtension(
+                    //         extension_number,
+                    //         "selective ack extension needs at least 6 bytes: header (1), length (1), and bitfield (4)",
+                    //     )
+                    //     .into());
+                    // }
 
                     let length = bytes.get_u8();
 
-                    if length % 4 != 0 {
-                        return Err(PacketParseError::InvalidExtension(
-                            extension_number,
-                            "selective ack requires length % 4 == 0",
-                        )
-                        .into());
-                    }
+                    // NOTE: The spec indicates that the length should be in multiples of 4, but
+                    //       like I noted earlier, this doesn't appear to be enforced.
+                    //
+                    // if length % 4 != 0 {
+                    //     return Err(PacketParseError::InvalidExtension(
+                    //         extension_number,
+                    //         "selective ack requires length % 4 == 0",
+                    //     )
+                    //     .into());
+                    // }
+
                     if bytes.remaining() < length as usize {
                         return Err(PacketParseError::InvalidExtension(
                             extension_number,
@@ -493,7 +513,10 @@ mod tests {
     }
 
     #[test]
-    fn from_malformed_bytes_with_extension_test() {
+    fn from_non_conforming_bytes_with_extension_test() {
+        // This tests behavior that doesn't conform to the protocol spec
+
+        // This is ok because we skip the type of the first extension in the list
         #[rustfmt::skip]
         assert!(
             Packet::try_from(Bytes::from_static(
@@ -503,21 +526,26 @@ mod tests {
                   0x00, 0x00, 0x00, 0x28,
                   0x00, 0x00, 0x10, 0x00,
                   0x00, 0x00, 0x00, 0x00,
-                  0x02, 0x00, 0x00])).is_err()
+                  0x02, 0x00, 0x00])).is_ok()
         );
 
+        // This is ok because the length % 4 == 0 check is not enforced in practice
         #[rustfmt::skip]
         assert!(
             Packet::try_from(Bytes::from_static(
-                // invalid selective ack extension
+                // invalid selective ack extension, according to spec
                 &[0x02 << 4 | 0x01, 0x01, 0x30, 0x39,
                   0x00, 0x03, 0xc4, 0x1a,
                   0x00, 0x00, 0x00, 0x28,
                   0x00, 0x00, 0x10, 0x00,
                   0x00, 0x00, 0x00, 0x00,
-                  0x01, 0x00, 0x00])).is_err()
+                  // length is 1 rather than minimum of 4
+                  0x01, 0x01, 0xff, 0x00])).is_ok()
         );
+    }
 
+    #[test]
+    fn from_malformed_bytes_with_extension_test() {
         #[rustfmt::skip]
         assert!(
             Packet::try_from(Bytes::from_static(
