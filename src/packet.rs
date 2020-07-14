@@ -183,8 +183,8 @@ impl TryFrom<Bytes> for Packet {
                 Ok(ExtensionType::None) => break,
                 Ok(ExtensionType::SelectiveAck) => {
                     // NOTE: The spec indicates that the length for a selective ack extension must
-                    // be at least 4, but in practice I've seen lengths of 2 or 3, so this
-                    // apparently isn't enforced. I'll at least require a length.
+                    //       be at least 4, but in practice I've seen lengths of 2 or 3, so this
+                    //       apparently isn't enforced. I'll at least require a length.
                     //
                     // if bytes.remaining() < 5 {
                     //     return Err(PacketParseError::InvalidExtension(
