@@ -152,13 +152,28 @@ impl TryFrom<Bytes> for Packet {
         // End of packet header, now we check for extensions
         let mut extensions = vec![];
         let mut extension_number = 0;
-        let mut extension_type = first_extension_type;
 
         // Consume the type if there's an actual extension
-        if extension_type != ExtensionType::None as u8 {
-            bytes.advance(1);
+        if first_extension_type != ExtensionType::None as u8 {
+            if bytes.has_remaining() {
+                let actual_first_extension_type = bytes.get_u8();
+                if first_extension_type != actual_first_extension_type {
+                    return Err(PacketParseError::InvalidExtension(
+                        0,
+                        "extension type doesn't agree with advertised first extension type",
+                    )
+                    .into());
+                }
+            } else {
+                return Err(PacketParseError::InvalidExtension(
+                    0,
+                    "expected extension, but hit end of buffer",
+                )
+                .into());
+            }
         }
 
+        let mut extension_type = first_extension_type;
         loop {
             match ExtensionType::try_from(extension_type) {
                 Ok(ExtensionType::None) => break,
@@ -420,6 +435,17 @@ mod tests {
                   0x00, 0x00, 0x10, 0x00,
                   0x00, 0x00, 0x00, 0x00])).is_err()
         );
+
+        #[rustfmt::skip]
+        assert!(
+            Packet::try_from(Bytes::from_static(
+                // give extension type, but no extension
+                &[0x02 << 4 | 0x01, 0x01, 0x30, 0x39,
+                  0x00, 0x03, 0xc4, 0x1a,
+                  0x00, 0x00, 0x00, 0x28,
+                  0x00, 0x00, 0x10, 0x00,
+                  0x00, 0x00, 0x00, 0x00])).is_err()
+        );
     }
 
     #[test]
@@ -443,6 +469,75 @@ mod tests {
                 )],
                 Bytes::new(),
             )
+        );
+    }
+
+    #[test]
+    fn from_bytes_with_unknown_extension_test() {
+        #[rustfmt::skip]
+        assert_eq!(
+            Packet::try_from(Bytes::from_static(
+                &[0x02 << 4 | 0x01, 0xff, 0x30, 0x39,
+                  0x00, 0x03, 0xc4, 0x1a,
+                  0x00, 0x00, 0x00, 0x28,
+                  0x00, 0x00, 0x10, 0x00,
+                  0x00, 0x00, 0x00, 0x00,
+                  // made-up extension with length 3
+                  0xff, 0x03, 0x00, 0x01, 0x00,
+                  // end extensions
+                  0x00])).unwrap(),
+            new_packet(vec![], Bytes::new())
+        );
+    }
+
+    #[test]
+    fn from_malformed_bytes_with_extension_test() {
+        #[rustfmt::skip]
+        assert!(
+            Packet::try_from(Bytes::from_static(
+                // say extension type is 1, but give extension type 2
+                &[0x02 << 4 | 0x01, 0x01, 0x30, 0x39,
+                  0x00, 0x03, 0xc4, 0x1a,
+                  0x00, 0x00, 0x00, 0x28,
+                  0x00, 0x00, 0x10, 0x00,
+                  0x00, 0x00, 0x00, 0x00,
+                  0x02, 0x00, 0x00])).is_err()
+        );
+
+        #[rustfmt::skip]
+        assert!(
+            Packet::try_from(Bytes::from_static(
+                // invalid selective ack extension
+                &[0x02 << 4 | 0x01, 0x01, 0x30, 0x39,
+                  0x00, 0x03, 0xc4, 0x1a,
+                  0x00, 0x00, 0x00, 0x28,
+                  0x00, 0x00, 0x10, 0x00,
+                  0x00, 0x00, 0x00, 0x00,
+                  0x01, 0x00, 0x00])).is_err()
+        );
+
+        #[rustfmt::skip]
+        assert!(
+            Packet::try_from(Bytes::from_static(
+                // invalid extension length
+                &[0x02 << 4 | 0x01, 0xff, 0x30, 0x39,
+                  0x00, 0x03, 0xc4, 0x1a,
+                  0x00, 0x00, 0x00, 0x28,
+                  0x00, 0x00, 0x10, 0x00,
+                  0x00, 0x00, 0x00, 0x00,
+                  0xff, 0x02, 0x00])).is_err()
+        );
+
+        #[rustfmt::skip]
+        assert!(
+            Packet::try_from(Bytes::from_static(
+                // missing a 0x00 at end of extension list
+                &[0x02 << 4 | 0x01, 0xff, 0x30, 0x39,
+                  0x00, 0x03, 0xc4, 0x1a,
+                  0x00, 0x00, 0x00, 0x28,
+                  0x00, 0x00, 0x10, 0x00,
+                  0x00, 0x00, 0x00, 0x00,
+                  0xff, 0x01, 0x00])).is_err()
         );
     }
 
