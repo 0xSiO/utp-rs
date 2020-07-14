@@ -1,6 +1,6 @@
 use std::{convert::TryFrom, net::SocketAddr};
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use tokio::net::{ToSocketAddrs, UdpSocket};
 
 use crate::{error::*, Packet};
@@ -36,12 +36,12 @@ impl UtpSocket {
         Ok(self.socket.connect(peer_addr).await?)
     }
 
-    pub async fn send(&mut self, buf: &[u8]) -> Result<usize> {
-        Ok(self.socket.send(buf).await?)
+    pub async fn send(&mut self, packet: Packet) -> Result<usize> {
+        Ok(self.socket.send(&Bytes::from(packet)).await?)
     }
 
-    pub async fn send_to(&mut self, buf: &[u8], target: impl ToSocketAddrs) -> Result<usize> {
-        Ok(self.socket.send_to(buf, target).await?)
+    pub async fn send_to(&mut self, packet: Packet, target: impl ToSocketAddrs) -> Result<usize> {
+        Ok(self.socket.send_to(&Bytes::from(packet), target).await?)
     }
 
     pub async fn recv(&mut self) -> Result<Packet> {
@@ -52,7 +52,11 @@ impl UtpSocket {
         Ok(Packet::try_from(buf.freeze())?)
     }
 
-    pub async fn recv_from(&mut self, buf: &mut [u8]) -> Result<(usize, SocketAddr)> {
-        Ok(self.socket.recv_from(buf).await?)
+    pub async fn recv_from(&mut self) -> Result<(Packet, SocketAddr)> {
+        let mut buf = BytesMut::with_capacity(MAX_DATAGRAM_SIZE);
+        buf.resize(MAX_DATAGRAM_SIZE, 0);
+        let (bytes_read, addr) = self.socket.recv_from(&mut buf).await?;
+        buf.truncate(bytes_read);
+        Ok((Packet::try_from(buf.freeze())?, addr))
     }
 }
