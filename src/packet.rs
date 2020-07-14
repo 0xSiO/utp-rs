@@ -10,7 +10,7 @@ const PACKET_HEADER_LEN: usize = 20;
 
 /// See http://bittorrent.org/beps/bep_0029.html#type
 #[repr(u8)]
-#[derive(Debug, Copy, Clone, TryFromPrimitive)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, TryFromPrimitive)]
 enum PacketType {
     Data = 0,
     Fin = 1,
@@ -20,7 +20,7 @@ enum PacketType {
 }
 
 /// See http://bittorrent.org/beps/bep_0029.html#extension
-#[derive(Debug, Copy, Clone, TryFromPrimitive)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, TryFromPrimitive)]
 #[repr(u8)]
 enum ExtensionType {
     None = 0,
@@ -28,7 +28,7 @@ enum ExtensionType {
 }
 
 /// See http://bittorrent.org/beps/bep_0029.html#extension
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 struct Extension {
     extension_type: ExtensionType,
     data: Bytes,
@@ -44,7 +44,7 @@ impl Extension {
 }
 
 /// See http://bittorrent.org/beps/bep_0029.html#header-format
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Packet {
     packet_type: PacketType,
     version: u8,
@@ -108,10 +108,16 @@ impl From<Packet> for Bytes {
         result.put_u16(packet.seq_number);
         result.put_u16(packet.ack_number);
         // TODO: Do we need to think about padding?
+        let mut has_extensions = false;
         for extension in packet.extensions {
+            has_extensions = true;
             result.put_u8(extension.extension_type as u8);
             result.put_u8(extension.data.len() as u8);
             result.put(extension.data);
+        }
+        if has_extensions {
+            // end extensions with a zero byte
+            result.put_u8(0);
         }
         result.put(packet.data);
         result.freeze()
@@ -280,7 +286,9 @@ mod tests {
                  0x00, 0x00, 0x10, 0x00,
                  0x00, 0x00, 0x00, 0x00,
                  // selective ack extension with bitfield
-                 0x01, 0x04, 0x00, 0x01, 0x00, 0x01]
+                 0x01, 0x04, 0x00, 0x01, 0x00, 0x01,
+                 // end extensions
+                 0x00]
         );
     }
 
@@ -319,6 +327,8 @@ mod tests {
                  0x00, 0x00, 0x00, 0x00,
                  // selective ack extension with bitfield
                  0x01, 0x04, 0x00, 0x01, 0x00, 0x01,
+                 // end extensions
+                 0x00,
                  // data
                  0x01, 0x02, 0x03, 0x04, 0x05]
         );
@@ -354,7 +364,92 @@ mod tests {
                  // 3 extension segments
                  0x01, 0x04, 0x00, 0x01, 0x00, 0x01,
                  0x01, 0x04, 0x01, 0x00, 0x00, 0x01,
-                 0x01, 0x04, 0x00, 0x01, 0x01, 0x00]
+                 0x01, 0x04, 0x00, 0x01, 0x01, 0x00,
+                 // end extensions
+                 0x00]
+        );
+    }
+
+    #[test]
+    fn from_bytes_test() {
+        #[rustfmt::skip]
+        assert_eq!(
+            Packet::try_from(Bytes::from_static(
+                &[0x02 << 4 | 0x01, 0x00, 0x30, 0x39,
+                  0x00, 0x03, 0xc4, 0x1a,
+                  0x00, 0x00, 0x00, 0x28,
+                  0x00, 0x00, 0x10, 0x00,
+                  0x00, 0x00, 0x00, 0x00])).unwrap(),
+            new_packet(vec![], Bytes::new())
+        );
+    }
+
+    #[test]
+    fn from_bytes_with_extension_test() {
+        #[rustfmt::skip]
+        assert_eq!(
+            Packet::try_from(Bytes::from_static(
+                &[0x02 << 4 | 0x01, 0x01, 0x30, 0x39,
+                  0x00, 0x03, 0xc4, 0x1a,
+                  0x00, 0x00, 0x00, 0x28,
+                  0x00, 0x00, 0x10, 0x00,
+                  0x00, 0x00, 0x00, 0x00,
+                  // selective ack extension with bitfield
+                  0x01, 0x04, 0x00, 0x01, 0x00, 0x01,
+                  // end extensions
+                  0x00])).unwrap(),
+            new_packet(
+                vec![Extension::new(
+                    ExtensionType::SelectiveAck,
+                    Bytes::from_static(&[0x00, 0x01, 0x00, 0x01]),
+                )],
+                Bytes::new(),
+            )
+        );
+    }
+
+    #[test]
+    fn from_bytes_with_data_test() {
+        #[rustfmt::skip]
+        assert_eq!(
+            Packet::try_from(Bytes::from_static(
+                &[0x02 << 4 | 0x01, 0x00, 0x30, 0x39,
+                  0x00, 0x03, 0xc4, 0x1a,
+                  0x00, 0x00, 0x00, 0x28,
+                  0x00, 0x00, 0x10, 0x00,
+                  0x00, 0x00, 0x00, 0x00,
+                  // data
+                  0x01, 0x02, 0x03, 0x04, 0x05])).unwrap(),
+            new_packet(
+                vec![],
+                Bytes::from_static(&[0x01, 0x02, 0x03, 0x04, 0x05]),
+            )
+        );
+    }
+
+    #[test]
+    fn from_bytes_with_extension_and_data_test() {
+        #[rustfmt::skip]
+        assert_eq!(
+            Packet::try_from(Bytes::from_static(
+                &[0x02 << 4 | 0x01, 0x01, 0x30, 0x39,
+                  0x00, 0x03, 0xc4, 0x1a,
+                  0x00, 0x00, 0x00, 0x28,
+                  0x00, 0x00, 0x10, 0x00,
+                  0x00, 0x00, 0x00, 0x00,
+                  // selective ack extension with bitfield
+                  0x01, 0x04, 0x00, 0x01, 0x00, 0x01,
+                  // end extensions
+                  0x00,
+                  // data
+                  0x01, 0x02, 0x03, 0x04, 0x05])).unwrap(),
+            new_packet(
+                vec![Extension::new(
+                    ExtensionType::SelectiveAck,
+                    Bytes::from_static(&[0x00, 0x01, 0x00, 0x01]),
+                )],
+                Bytes::from_static(&[0x01, 0x02, 0x03, 0x04, 0x05]),
+            )
         );
     }
 }
