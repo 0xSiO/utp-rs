@@ -260,6 +260,9 @@ impl TryFrom<Bytes> for Packet {
                     todo!();
                 }
                 ExtensionType::Unknown(id) => {
+                    // TODO: We're using the same extension processing code for all branches of the
+                    // match (other than None). Maybe modify the Extension type to be an enum that
+                    // has meaningful data in each of the variants instead of storing raw bytes.
                     if bytes.remaining() < 1 {
                         return Err(PacketParseError::ExtensionTooSmall {
                             index: extension_number,
