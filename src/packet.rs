@@ -19,12 +19,14 @@ enum PacketType {
     Syn = 4,
 }
 
-/// See http://bittorrent.org/beps/bep_0029.html#extension
+/// See http://bittorrent.org/beps/bep_0029.html#extension and UTP-related code in
+/// https://github.com/arvidn/libtorrent
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum ExtensionType {
     None,
     SelectiveAck,
     Bitfield,
+    CloseReason,
     Unknown(u8),
 }
 
@@ -34,6 +36,7 @@ impl From<u8> for ExtensionType {
             0 => ExtensionType::None,
             1 => ExtensionType::SelectiveAck,
             2 => ExtensionType::Bitfield,
+            3 => ExtensionType::CloseReason,
             n => ExtensionType::Unknown(n),
         }
     }
@@ -45,6 +48,7 @@ impl From<ExtensionType> for u8 {
             ExtensionType::None => 0,
             ExtensionType::SelectiveAck => 1,
             ExtensionType::Bitfield => 2,
+            ExtensionType::CloseReason => 3,
             ExtensionType::Unknown(n) => n,
         }
     }
@@ -249,6 +253,11 @@ impl TryFrom<Bytes> for Packet {
                 }
                 ExtensionType::Bitfield => {
                     // TODO: This is a deprecated extension
+                    todo!();
+                }
+                ExtensionType::CloseReason => {
+                    // TODO: See https://github.com/arvidn/libtorrent/blob/master/include/libtorrent/close_reason.hpp
+                    todo!();
                 }
                 ExtensionType::Unknown(id) => {
                     if bytes.remaining() < 1 {
