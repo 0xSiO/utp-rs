@@ -20,11 +20,34 @@ enum PacketType {
 }
 
 /// See http://bittorrent.org/beps/bep_0029.html#extension
-#[derive(Debug, Copy, Clone, PartialEq, Eq, TryFromPrimitive)]
-#[repr(u8)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum ExtensionType {
-    None = 0,
-    SelectiveAck = 1,
+    None,
+    SelectiveAck,
+    Bitfield,
+    Unknown(u8),
+}
+
+impl From<u8> for ExtensionType {
+    fn from(num: u8) -> Self {
+        match num {
+            0 => ExtensionType::None,
+            1 => ExtensionType::SelectiveAck,
+            2 => ExtensionType::Bitfield,
+            n => ExtensionType::Unknown(n),
+        }
+    }
+}
+
+impl From<ExtensionType> for u8 {
+    fn from(extension_type: ExtensionType) -> Self {
+        match extension_type {
+            ExtensionType::None => 0,
+            ExtensionType::SelectiveAck => 1,
+            ExtensionType::Bitfield => 2,
+            ExtensionType::Unknown(n) => n,
+        }
+    }
 }
 
 /// See http://bittorrent.org/beps/bep_0029.html#extension
@@ -97,9 +120,9 @@ impl From<Packet> for Bytes {
         let mut result = BytesMut::with_capacity(packet_length);
         result.put_u8((packet.packet_type as u8) << 4 | packet.version);
         if packet.extensions.is_empty() {
-            result.put_u8(ExtensionType::None as u8);
+            result.put_u8(ExtensionType::None.into());
         } else {
-            result.put_u8(packet.extensions[0].extension_type as u8);
+            result.put_u8(packet.extensions[0].extension_type.into());
         }
         result.put_u16(packet.connection_id);
         result.put_u32(packet.timestamp_micros);
@@ -111,7 +134,7 @@ impl From<Packet> for Bytes {
         let mut has_extensions = false;
         for extension in packet.extensions {
             has_extensions = true;
-            result.put_u8(extension.extension_type as u8);
+            result.put_u8(extension.extension_type.into());
             result.put_u8(extension.data.len() as u8);
             result.put(extension.data);
         }
@@ -156,7 +179,7 @@ impl TryFrom<Bytes> for Packet {
         let mut extension_number = 0;
 
         // Consume the type if there's an actual extension
-        if first_extension_type != ExtensionType::None as u8 {
+        if first_extension_type != ExtensionType::None.into() {
             if bytes.has_remaining() {
                 // NOTE: The spec indicates that the first byte of an extension should be non-zero,
                 //       as a zero byte terminates the list. In practice, however, a zero first
@@ -179,9 +202,9 @@ impl TryFrom<Bytes> for Packet {
 
         let mut extension_type = first_extension_type;
         loop {
-            match ExtensionType::try_from(extension_type) {
-                Ok(ExtensionType::None) => break,
-                Ok(ExtensionType::SelectiveAck) => {
+            match ExtensionType::from(extension_type) {
+                ExtensionType::None => break,
+                ExtensionType::SelectiveAck => {
                     // NOTE: The spec indicates that the length for a selective ack extension must
                     //       be at least 4, but in practice I've seen lengths of 2 or 3, so this
                     //       apparently isn't enforced. I'll at least require a length.
@@ -227,7 +250,10 @@ impl TryFrom<Bytes> for Packet {
                     let bitfield = bytes.split_to(length as usize);
                     extensions.push(Extension::new(ExtensionType::SelectiveAck, bitfield))
                 }
-                Err(_) => {
+                ExtensionType::Bitfield => {
+                    // TODO: This is a deprecated extension
+                }
+                ExtensionType::Unknown(_) => {
                     // Unknown extension, just skip it
                     if bytes.remaining() < 1 {
                         return Err(PacketParseError::ExtensionTooSmall {
