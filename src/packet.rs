@@ -130,7 +130,6 @@ impl From<Packet> for Bytes {
         result.put_u32(packet.window_size);
         result.put_u16(packet.seq_number);
         result.put_u16(packet.ack_number);
-        // TODO: Do we need to think about padding?
         let mut has_extensions = false;
         for extension in packet.extensions {
             has_extensions = true;
@@ -147,8 +146,6 @@ impl From<Packet> for Bytes {
     }
 }
 
-// TODO: May want to support holding onto unknown extensions, doesn't seem like a good idea to
-//       just throw away data
 impl TryFrom<Bytes> for Packet {
     type Error = Error;
 
@@ -248,13 +245,12 @@ impl TryFrom<Bytes> for Packet {
                     }
 
                     let bitfield = bytes.split_to(length as usize);
-                    extensions.push(Extension::new(ExtensionType::SelectiveAck, bitfield))
+                    extensions.push(Extension::new(ExtensionType::SelectiveAck, bitfield));
                 }
                 ExtensionType::Bitfield => {
                     // TODO: This is a deprecated extension
                 }
-                ExtensionType::Unknown(_) => {
-                    // Unknown extension, just skip it
+                ExtensionType::Unknown(id) => {
                     if bytes.remaining() < 1 {
                         return Err(PacketParseError::ExtensionTooSmall {
                             index: extension_number,
@@ -273,7 +269,8 @@ impl TryFrom<Bytes> for Packet {
                         }
                         .into());
                     }
-                    let _ = bytes.split_to(length as usize);
+                    let data = bytes.split_to(length as usize);
+                    extensions.push(Extension::new(ExtensionType::Unknown(id), data));
                 }
             }
             extension_number += 1;
@@ -531,7 +528,13 @@ mod tests {
                   0xff, 0x03, 0x00, 0x01, 0x00,
                   // end extensions
                   0x00])).unwrap(),
-            new_packet(vec![], Bytes::new())
+            new_packet(
+                vec![Extension::new(
+                    ExtensionType::Unknown(0xff),
+                    Bytes::from_static(&[0x00, 0x01, 0x00]),
+                )],
+                Bytes::new(),
+            )
         );
     }
 
