@@ -1,7 +1,6 @@
 use std::convert::TryFrom;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use num_enum::TryFromPrimitive;
 
 use crate::error::*;
 
@@ -10,13 +9,28 @@ const PACKET_HEADER_LEN: usize = 20;
 
 /// See http://bittorrent.org/beps/bep_0029.html#type
 #[repr(u8)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, TryFromPrimitive)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum PacketType {
     Data = 0,
     Fin = 1,
     State = 2,
     Reset = 3,
     Syn = 4,
+}
+
+impl TryFrom<u8> for PacketType {
+    type Error = Error;
+
+    fn try_from(value: u8) -> Result<Self> {
+        match value {
+            0 => Ok(PacketType::Data),
+            1 => Ok(PacketType::Fin),
+            2 => Ok(PacketType::State),
+            3 => Ok(PacketType::Reset),
+            4 => Ok(PacketType::Syn),
+            n => Err(Error::InvalidPacketType(n)),
+        }
+    }
 }
 
 /// See http://bittorrent.org/beps/bep_0029.html#extension and UTP-related code in
@@ -159,8 +173,7 @@ impl TryFrom<Bytes> for Packet {
         }
 
         let type_and_version = bytes.get_u8();
-        let packet_type = PacketType::try_from(type_and_version >> 4)
-            .map_err(|_| PacketParseError::InvalidType(type_and_version >> 4))?;
+        let packet_type = PacketType::try_from(type_and_version >> 4)?;
 
         let version = match type_and_version & 0x0F {
             1 => 1,
