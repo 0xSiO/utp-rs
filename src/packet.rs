@@ -372,11 +372,11 @@ mod tests {
                     Bytes::from_static(&[0x00, 0x01, 0x00, 0x01]),
                 ),
                 Extension::new(
-                    ExtensionType::SelectiveAck,
+                    ExtensionType::Bitfield,
                     Bytes::from_static(&[0x01, 0x00, 0x00, 0x01]),
                 ),
                 Extension::new(
-                    ExtensionType::SelectiveAck,
+                    ExtensionType::CloseReason,
                     Bytes::from_static(&[0x00, 0x01, 0x01, 0x00]),
                 ),
             ],
@@ -392,8 +392,8 @@ mod tests {
                  0x00, 0x00, 0x00, 0x00,
                  // 3 extension segments
                  0x01, 0x04, 0x00, 0x01, 0x00, 0x01,
-                 0x01, 0x04, 0x01, 0x00, 0x00, 0x01,
-                 0x01, 0x04, 0x00, 0x01, 0x01, 0x00,
+                 0x02, 0x04, 0x01, 0x00, 0x00, 0x01,
+                 0x03, 0x04, 0x00, 0x01, 0x01, 0x00,
                  // end extensions
                  0x00]
         );
@@ -589,20 +589,20 @@ mod tests {
         #[rustfmt::skip]
         assert_eq!(
             Packet::try_from(Bytes::from_static(
-                &[0x02 << 4 | 0x01, 0x01, 0x30, 0x39,
+                &[0x02 << 4 | 0x01, 0x03, 0x30, 0x39,
                   0x00, 0x03, 0xc4, 0x1a,
                   0x00, 0x00, 0x00, 0x28,
                   0x00, 0x00, 0x10, 0x00,
                   0x00, 0x00, 0x00, 0x00,
-                  // selective ack extension with bitfield
-                  0x01, 0x04, 0x00, 0x01, 0x00, 0x01,
+                  // 'close reason' extension with random data
+                  0x03, 0x04, 0x00, 0x01, 0x00, 0x01,
                   // end extensions
                   0x00,
                   // data
                   0x01, 0x02, 0x03, 0x04, 0x05])).unwrap(),
             new_packet(
                 vec![Extension::new(
-                    ExtensionType::SelectiveAck,
+                    ExtensionType::CloseReason,
                     Bytes::from_static(&[0x00, 0x01, 0x00, 0x01]),
                 )],
                 Bytes::from_static(&[0x01, 0x02, 0x03, 0x04, 0x05]),
