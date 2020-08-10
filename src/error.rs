@@ -31,7 +31,7 @@ pub enum PacketParseError {
     )]
     ExtensionLengthTooLarge {
         index: usize,
-        length: u8,
+        length: usize,
         remaining: usize,
     },
 }

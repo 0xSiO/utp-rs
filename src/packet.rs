@@ -39,8 +39,8 @@ impl TryFrom<u8> for PacketType {
 enum ExtensionType {
     None,
     SelectiveAck,
-    Bitfield,
-    CloseReason,
+    Bitfield,    // TODO: This type is deprecated
+    CloseReason, // See include/libtorrent/close_reason.hpp in libtorrent
     Unknown(u8),
 }
 
@@ -189,48 +189,33 @@ impl TryFrom<Bytes> for Packet {
         let ack_number = bytes.get_u16();
 
         // End of packet header, now we check for extensions
-        let mut extensions = vec![];
-        let mut extension_number = 0;
 
-        // Consume the type if there's an actual extension
+        // If any extensions are specified, consume the first extension's 'type' byte.
+        //
+        // NOTE: We do this because in practice the first extension's type byte is usually just
+        // zero, even if the type was specified as nonzero in the packet header. In this case, the
+        // packet header takes precedence.
         if first_extension_type != ExtensionType::None.into() {
             if bytes.has_remaining() {
-                // NOTE: The spec indicates that the first byte of an extension should be non-zero,
-                //       as a zero byte terminates the list. In practice, however, a zero first
-                //       byte in the extension list with a nonzero byte for the first extension
-                //       type (given in the header) is just ignored.
-                //
-                // let actual_first_extension_type = bytes.get_u8();
-                // if first_extension_type != actual_first_extension_type {
-                //     return Err(PacketParseError::InvalidExtension(
-                //         0,
-                //         "extension type doesn't agree with advertised first extension type",
-                //     )
-                //     .into());
-                // }
                 bytes.advance(1);
             } else {
                 return Err(PacketParseError::ExpectedExtension(0).into());
             }
         }
 
+        let mut extensions = vec![];
+        let mut extension_number = 0;
         let mut extension_type = first_extension_type;
+
         loop {
             match ExtensionType::from(extension_type) {
                 ExtensionType::None => break,
-                ExtensionType::SelectiveAck => {
-                    // NOTE: The spec indicates that the length for a selective ack extension must
-                    //       be at least 4, but in practice I've seen lengths of 2 or 3, so this
-                    //       apparently isn't enforced. I'll at least require a length.
-                    //
-                    // if bytes.remaining() < 5 {
-                    //     return Err(PacketParseError::InvalidExtension(
-                    //         extension_number,
-                    //         "selective ack extension needs at least 6 bytes: header (1), length (1), and bitfield (4)",
-                    //     )
-                    //     .into());
-                    // }
-                    if bytes.remaining() < 1 {
+                other_type => {
+                    // NOTE: The spec indicates that the length byte for a selective ack extension
+                    // must be at least 4 and in multiples of 4, but in practice I've seen lengths
+                    // of 2 or 3, so this apparently isn't enforced.
+
+                    if !bytes.has_remaining() {
                         return Err(PacketParseError::ExtensionTooSmall {
                             index: extension_number,
                             expected: 2,
@@ -239,20 +224,9 @@ impl TryFrom<Bytes> for Packet {
                         .into());
                     }
 
-                    let length = bytes.get_u8();
+                    let length = bytes.get_u8() as usize;
 
-                    // NOTE: The spec indicates that the length should be in multiples of 4, but
-                    //       like I noted earlier, this doesn't appear to be enforced.
-                    //
-                    // if length % 4 != 0 {
-                    //     return Err(PacketParseError::InvalidExtension(
-                    //         extension_number,
-                    //         "selective ack requires length % 4 == 0",
-                    //     )
-                    //     .into());
-                    // }
-
-                    if bytes.remaining() < length as usize {
+                    if length > bytes.remaining() {
                         return Err(PacketParseError::ExtensionLengthTooLarge {
                             index: extension_number,
                             length,
@@ -261,44 +235,13 @@ impl TryFrom<Bytes> for Packet {
                         .into());
                     }
 
-                    let bitfield = bytes.split_to(length as usize);
-                    extensions.push(Extension::new(ExtensionType::SelectiveAck, bitfield));
-                }
-                ExtensionType::Bitfield => {
-                    // TODO: This is a deprecated extension
-                    todo!();
-                }
-                ExtensionType::CloseReason => {
-                    // TODO: See https://github.com/arvidn/libtorrent/blob/master/include/libtorrent/close_reason.hpp
-                    todo!();
-                }
-                ExtensionType::Unknown(id) => {
-                    // TODO: We're using the same extension processing code for all branches of the
-                    // match (other than None). Maybe modify the Extension type to be an enum that
-                    // has meaningful data in each of the variants instead of storing raw bytes.
-                    if bytes.remaining() < 1 {
-                        return Err(PacketParseError::ExtensionTooSmall {
-                            index: extension_number,
-                            expected: 2,
-                            actual: 1,
-                        }
-                        .into());
-                    }
-
-                    let length = bytes.get_u8();
-                    if bytes.remaining() < length as usize {
-                        return Err(PacketParseError::ExtensionLengthTooLarge {
-                            index: extension_number,
-                            length,
-                            remaining: bytes.remaining(),
-                        }
-                        .into());
-                    }
-                    let data = bytes.split_to(length as usize);
-                    extensions.push(Extension::new(ExtensionType::Unknown(id), data));
+                    let extension_data = bytes.split_to(length);
+                    extensions.push(Extension::new(other_type, extension_data));
                 }
             }
+
             extension_number += 1;
+
             if bytes.has_remaining() {
                 extension_type = bytes.get_u8();
             } else {
