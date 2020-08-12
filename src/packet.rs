@@ -10,7 +10,7 @@ const PACKET_HEADER_LEN: usize = 20;
 /// See http://bittorrent.org/beps/bep_0029.html#type
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum PacketType {
+pub(crate) enum PacketType {
     Data = 0,
     Fin = 1,
     State = 2,
@@ -36,7 +36,7 @@ impl TryFrom<u8> for PacketType {
 /// See http://bittorrent.org/beps/bep_0029.html#extension and UTP-related code in
 /// https://github.com/arvidn/libtorrent
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum ExtensionType {
+pub(crate) enum ExtensionType {
     None,
     SelectiveAck,
     Bitfield,    // TODO: This type is deprecated
@@ -70,7 +70,7 @@ impl From<ExtensionType> for u8 {
 
 /// See http://bittorrent.org/beps/bep_0029.html#extension
 #[derive(Debug, PartialEq, Eq)]
-struct Extension {
+pub(crate) struct Extension {
     extension_type: ExtensionType,
     data: Bytes,
 }
@@ -86,17 +86,17 @@ impl Extension {
 
 /// See http://bittorrent.org/beps/bep_0029.html#header-format
 #[derive(Debug, PartialEq, Eq)]
-pub struct Packet {
-    packet_type: PacketType,
-    version: u8,
-    connection_id: u16,
-    timestamp_micros: u32,
-    timestamp_delta_micros: u32,
-    window_size: u32,
-    seq_number: u16,
-    ack_number: u16,
-    extensions: Vec<Extension>,
-    data: Bytes,
+pub(crate) struct Packet {
+    pub(crate) packet_type: PacketType,
+    pub(crate) version: u8,
+    pub(crate) connection_id: u16,
+    pub(crate) timestamp_micros: u32,
+    pub(crate) timestamp_delta_micros: u32,
+    pub(crate) window_size: u32,
+    pub(crate) seq_number: u16,
+    pub(crate) ack_number: u16,
+    pub(crate) extensions: Vec<Extension>,
+    pub(crate) data: Bytes,
 }
 
 impl Packet {
