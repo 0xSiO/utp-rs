@@ -86,7 +86,7 @@ impl Extension {
 
 /// See http://bittorrent.org/beps/bep_0029.html#header-format
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct Packet {
+pub struct Packet {
     pub(crate) packet_type: PacketType,
     pub(crate) version: u8,
     pub(crate) connection_id: u16,

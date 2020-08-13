@@ -1,8 +1,15 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use std::collections::{HashMap, VecDeque};
 
-use tokio::{net::ToSocketAddrs, sync::Mutex};
+use tokio::{
+    net::ToSocketAddrs,
+    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+};
 
-use crate::{error::*, UtpSocket};
+use crate::{
+    error::*,
+    packet::{Packet, PacketType},
+    UtpSocket,
+};
 
 // General idea of how this might work:
 //
@@ -22,14 +29,17 @@ use crate::{error::*, UtpSocket};
 // - handle the routed packet, updating any internal buffers and connection state
 
 struct UtpListener {
-    socket: Arc<Mutex<UtpSocket>>,
-    connections: HashMap<u16, Connection>,
+    socket: UtpSocket,
+    connection_queue: VecDeque<Connection>,
+    incoming_packet_tx_map: HashMap<u16, UnboundedSender<Packet>>,
+    outbound_packet_tx: UnboundedSender<Packet>,
+    outbound_packet_rx: UnboundedReceiver<Packet>,
 }
 
 impl UtpListener {
     /// Creates a new UtpListener, which will be bound to the specified address.
     ///
-    /// The returned listener is ready for accepting connections.
+    /// The returned listener is ready to begin listening for incoming messages.
     ///
     /// Binding with a port number of 0 will request that the OS assigns a port to this
     /// listener. The port allocated can be queried via the local_addr method.
@@ -39,19 +49,41 @@ impl UtpListener {
     /// succeed in creating a listener, the error returned from the last attempt (the last
     /// address) is returned.
     pub async fn bind(addr: impl ToSocketAddrs) -> Result<Self> {
+        let (outbound_packet_tx, outbound_packet_rx) = unbounded_channel();
         Ok(UtpListener {
-            socket: Arc::new(Mutex::new(UtpSocket::bind(addr).await?)),
-            connections: Default::default(),
+            socket: UtpSocket::bind(addr).await?,
+            connection_queue: Default::default(),
+            incoming_packet_tx_map: Default::default(),
+            outbound_packet_tx,
+            outbound_packet_rx,
         })
     }
 
-    pub async fn accept(&mut self) -> Result<(UtpStream, SocketAddr)> {
-        todo!()
-    }
-}
+    pub async fn listen(&mut self) -> Result<()> {
+        loop {
+            let packet = self.socket.recv().await?;
 
-struct UtpStream {
-    connection: Connection,
+            match packet.packet_type {
+                PacketType::Syn => {
+                    if let Some(_) = self.incoming_packet_tx_map.get(&packet.connection_id) {
+                        // Connection ID collides with existing connection, so ignore
+                        continue;
+                    }
+
+                    let (new_incoming_tx, new_incoming_rx) = unbounded_channel();
+                    self.incoming_packet_tx_map
+                        .insert(packet.connection_id, new_incoming_tx.clone());
+                    self.connection_queue.push_back(Connection::new(
+                        ConnectionState::Pending,
+                        new_incoming_tx,
+                        new_incoming_rx,
+                    ))
+                    // TODO: Negotiate new connection with client
+                }
+                _ => todo!(),
+            }
+        }
+    }
 }
 
 enum ConnectionState {
@@ -60,6 +92,21 @@ enum ConnectionState {
 }
 
 struct Connection {
-    socket: Arc<Mutex<UtpSocket>>,
     state: ConnectionState,
+    outbound_packet_tx: UnboundedSender<Packet>,
+    incoming_packet_rx: UnboundedReceiver<Packet>,
+}
+
+impl Connection {
+    pub fn new(
+        state: ConnectionState,
+        outbound_packet_tx: UnboundedSender<Packet>,
+        incoming_packet_rx: UnboundedReceiver<Packet>,
+    ) -> Self {
+        Self {
+            state,
+            outbound_packet_tx,
+            incoming_packet_rx,
+        }
+    }
 }
