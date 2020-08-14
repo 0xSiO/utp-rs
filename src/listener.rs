@@ -1,8 +1,13 @@
-use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
+use crossbeam_deque::Injector;
+use dashmap::DashMap;
 use tokio::{
     net::ToSocketAddrs,
-    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    sync::{
+        mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+        Mutex,
+    },
 };
 
 use crate::{
@@ -19,8 +24,9 @@ use crate::{
 // - We deserialize the packet and examine its type.
 //   - if it's a SYN packet, check to see if we already have a matching connection
 //     - if we're already connected, ignore this packet
-//     - else, begin the handshake process to set up a new connection. Connections are
-//       stored in a HashMap, identified by the 16-bit connection ID in the packet header.
+//     - else, begin the handshake process to set up a new connection. Channels to
+//       connections are stored in a HashMap, identified by the 16-bit connection ID in
+//       the packet header.
 //   - if not SYN, route the packet to an existing connection, or send a RESET if there is
 //     no existing connection.
 //
@@ -28,10 +34,18 @@ use crate::{
 // - ??? (some structure or task needs to read the routed packet)
 // - handle the routed packet, updating any internal buffers and connection state
 
-struct UtpListener {
-    socket: UtpSocket,
-    connection_queue: VecDeque<Connection>,
-    incoming_packet_tx_map: HashMap<u16, UnboundedSender<Packet>>,
+// New plan!
+//
+// Each connection shares access to the socket. When a connection reads a packet, it
+// checks the connection ID. If it doesn't match the current connection's ID, then
+// it sends the packet through the corresponding connection's incoming channel. We locate
+// the channel using a DashMap. When a connection is dropped, it removes its channel
+// entry from the DashMap.
+
+pub struct UtpListener {
+    socket: Arc<Mutex<UtpSocket>>,
+    connection_queue: Injector<Connection>,
+    incoming_packet_tx_map: DashMap<u16, UnboundedSender<Packet>>,
     outbound_packet_tx: UnboundedSender<Packet>,
     outbound_packet_rx: UnboundedReceiver<Packet>,
 }
@@ -51,17 +65,18 @@ impl UtpListener {
     pub async fn bind(addr: impl ToSocketAddrs) -> Result<Self> {
         let (outbound_packet_tx, outbound_packet_rx) = unbounded_channel();
         Ok(UtpListener {
-            socket: UtpSocket::bind(addr).await?,
-            connection_queue: Default::default(),
+            socket: Arc::new(Mutex::new(UtpSocket::bind(addr).await?)),
+            connection_queue: Injector::new(),
             incoming_packet_tx_map: Default::default(),
             outbound_packet_tx,
             outbound_packet_rx,
         })
     }
 
-    pub async fn listen(&mut self) -> Result<()> {
+    // TODO: Need a way to spawn this loop but also allow accepting new connections
+    pub async fn listen(&self) -> Result<()> {
         loop {
-            let packet = self.socket.recv().await?;
+            let packet = self.socket.lock().await.recv().await?;
 
             match packet.packet_type {
                 PacketType::Syn => {
@@ -73,12 +88,14 @@ impl UtpListener {
                     let (new_incoming_tx, new_incoming_rx) = unbounded_channel();
                     self.incoming_packet_tx_map
                         .insert(packet.connection_id, new_incoming_tx.clone());
-                    self.connection_queue.push_back(Connection::new(
+                    self.connection_queue.push(Connection::new(
                         ConnectionState::Pending,
-                        new_incoming_tx,
+                        self.outbound_packet_tx.clone(),
                         new_incoming_rx,
-                    ))
+                    ));
+
                     // TODO: Negotiate new connection with client
+                    new_incoming_tx.send(packet).unwrap();
                 }
                 _ => todo!(),
             }

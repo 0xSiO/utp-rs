@@ -10,26 +10,19 @@ const MAX_DATAGRAM_SIZE: usize = 1472;
 
 pub struct UtpSocket {
     socket: UdpSocket,
-    /// Maximum number of bytes the socket may have in-flight at any given time
-    max_window: u32,
-    /// Number of bytes currently in-flight
-    local_window: u32,
-    /// Upper limit of the number of in-flight bytes, as given by remote peer
-    remote_window: u32,
+    // Maximum number of bytes the socket may have in-flight at any given time
+    // max_window: u32,
+    // Number of bytes currently in-flight
+    // local_window: u32,
+    // Upper limit of the number of in-flight bytes, as given by remote peer
+    // remote_window: u32,
 }
 
 impl UtpSocket {
     pub async fn bind(local_addr: impl ToSocketAddrs) -> Result<Self> {
-        let socket = UdpSocket::bind(local_addr).await?;
-        Ok(
-            // TODO: Check these defaults
-            Self {
-                socket,
-                max_window: 0,
-                local_window: 0,
-                remote_window: 0,
-            },
-        )
+        Ok(Self {
+            socket: UdpSocket::bind(local_addr).await?,
+        })
     }
 
     pub async fn connect(&self, peer_addr: impl ToSocketAddrs) -> Result<()> {
