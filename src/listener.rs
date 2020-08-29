@@ -1,7 +1,17 @@
-use std::sync::Arc;
+use std::{
+    net::SocketAddr,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+};
 
 use crossbeam_deque::Injector;
-use dashmap::DashMap;
+use dashmap::{DashMap, ElementGuard};
+use futures_util::{
+    future::{FutureExt, LocalBoxFuture},
+    ready,
+    stream::Stream,
+};
 use tokio::{
     net::ToSocketAddrs,
     sync::{
@@ -62,88 +72,138 @@ use crate::{
 // All connection states are held inside a single DashMap, where the values are of some
 // type `ConnectionState`
 
+pub struct ConnectionState {}
+
+pub struct Connection {
+    socket: Arc<Mutex<UtpSocket>>,
+    manager: Arc<ConnectionManager>,
+    packet_rx: UnboundedReceiver<Packet>,
+    // TODO: Double-check lifetimes of boxed futures
+    read_future: Option<LocalBoxFuture<'static, Packet>>,
+    write_future: Option<LocalBoxFuture<'static, Packet>>,
+}
+
+impl Stream for Connection {
+    type Item = (); // some "message" type
+
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Option<Self::Item>> {
+        todo!()
+    }
+}
+
+pub struct ConnectionManager {
+    connection_states: DashMap<u16, ConnectionState>,
+    syn_packet_tx: UnboundedSender<Packet>,
+}
+
+impl ConnectionManager {
+    pub fn get_state(&self, id: u16) -> Option<ElementGuard<u16, ConnectionState>> {
+        self.connection_states.get(&id)
+    }
+
+    pub fn route(&self, packet: Packet) {
+        todo!()
+    }
+}
+
 pub struct UtpListener {
     socket: Arc<Mutex<UtpSocket>>,
-    connection_queue: Injector<Connection>,
-    incoming_packet_tx_map: DashMap<u16, UnboundedSender<Packet>>,
-    outbound_packet_tx: UnboundedSender<Packet>,
-    outbound_packet_rx: UnboundedReceiver<Packet>,
+    syn_packet_rx: UnboundedReceiver<Packet>,
+    connection_manager: Arc<ConnectionManager>,
+    read_future: Option<LocalBoxFuture<'static, Result<(Packet, SocketAddr)>>>,
+    write_future: Option<LocalBoxFuture<'static, Packet>>,
 }
 
-impl UtpListener {
-    /// Creates a new UtpListener, which will be bound to the specified address.
-    ///
-    /// The returned listener is ready to begin listening for incoming messages.
-    ///
-    /// Binding with a port number of 0 will request that the OS assigns a port to this
-    /// listener. The port allocated can be queried via the local_addr method.
-    ///
-    /// If addr yields multiple addresses, bind will be attempted with each of the
-    /// addresses until one succeeds and returns the listener. If none of the addresses
-    /// succeed in creating a listener, the error returned from the last attempt (the last
-    /// address) is returned.
-    pub async fn bind(addr: impl ToSocketAddrs) -> Result<Self> {
-        let (outbound_packet_tx, outbound_packet_rx) = unbounded_channel();
-        Ok(UtpListener {
-            socket: Arc::new(Mutex::new(UtpSocket::bind(addr).await?)),
-            connection_queue: Injector::new(),
-            incoming_packet_tx_map: Default::default(),
-            outbound_packet_tx,
-            outbound_packet_rx,
-        })
-    }
+impl Stream for UtpListener {
+    type Item = Result<Connection>;
 
-    // TODO: Need a way to spawn this loop but also allow accepting new connections
-    pub async fn listen(&self) -> Result<()> {
-        loop {
-            let packet = self.socket.lock().await.recv().await?;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        // check queue and poll futures if needed
 
-            match packet.packet_type {
+        let socket = Arc::clone(&self.socket);
+        self.read_future = Some(Box::pin(async move {
+            let mut socket = socket.lock().await;
+            socket.recv_from().await
+        }));
+
+        // Ok to unwrap since we just set the field to Option::Some
+        let packet = ready!(self.read_future.as_mut().unwrap().as_mut().poll(cx));
+        // Remove the finished future
+        self.read_future.take();
+
+        match packet {
+            Ok((packet, addr)) => match packet.packet_type {
                 PacketType::Syn => {
-                    if let Some(_) = self.incoming_packet_tx_map.get(&packet.connection_id) {
-                        // Connection ID collides with existing connection, so ignore
-                        continue;
+                    // If we already have state for the connection ID, skip the packet
+                    if self
+                        .connection_manager
+                        .get_state(packet.connection_id)
+                        .is_some()
+                    {
+                        // TODO: Check that this is ok to do
+                        return Poll::Pending;
+                    } else {
+                        // TODO: set up new connection state
                     }
-
-                    let (new_incoming_tx, new_incoming_rx) = unbounded_channel();
-                    self.incoming_packet_tx_map
-                        .insert(packet.connection_id, new_incoming_tx.clone());
-                    self.connection_queue.push(Connection::new(
-                        ConnectionState::Pending,
-                        self.outbound_packet_tx.clone(),
-                        new_incoming_rx,
-                    ));
-
-                    // TODO: Negotiate new connection with client
-                    new_incoming_tx.send(packet).unwrap();
                 }
                 _ => todo!(),
-            }
+            },
+            Err(err) => return Poll::Ready(Some(Err(err))),
         }
+
+        todo!()
     }
 }
 
-enum ConnectionState {
-    Pending,
-    Established,
-}
+//impl UtpListener {
+//    /// Creates a new UtpListener, which will be bound to the specified address.
+//    ///
+//    /// The returned listener is ready to begin listening for incoming messages.
+//    ///
+//    /// Binding with a port number of 0 will request that the OS assigns a port to this
+//    /// listener. The port allocated can be queried via the local_addr method.
+//    ///
+//    /// If addr yields multiple addresses, bind will be attempted with each of the
+//    /// addresses until one succeeds and returns the listener. If none of the addresses
+//    /// succeed in creating a listener, the error returned from the last attempt (the last
+//    /// address) is returned.
+//    pub async fn bind(addr: impl ToSocketAddrs) -> Result<Self> {
+//        let (outbound_packet_tx, outbound_packet_rx) = unbounded_channel();
+//        Ok(UtpListener {
+//            socket: Arc::new(Mutex::new(UtpSocket::bind(addr).await?)),
+//            connection_queue: Injector::new(),
+//            incoming_packet_tx_map: Default::default(),
+//            outbound_packet_tx,
+//            outbound_packet_rx,
+//        })
+//    }
 
-struct Connection {
-    state: ConnectionState,
-    outbound_packet_tx: UnboundedSender<Packet>,
-    incoming_packet_rx: UnboundedReceiver<Packet>,
-}
+//    // TODO: Need a way to spawn this loop but also allow accepting new connections
+//    pub async fn listen(&self) -> Result<()> {
+//        loop {
+//            let packet = self.socket.lock().await.recv().await?;
 
-impl Connection {
-    pub fn new(
-        state: ConnectionState,
-        outbound_packet_tx: UnboundedSender<Packet>,
-        incoming_packet_rx: UnboundedReceiver<Packet>,
-    ) -> Self {
-        Self {
-            state,
-            outbound_packet_tx,
-            incoming_packet_rx,
-        }
-    }
-}
+//            match packet.packet_type {
+//                PacketType::Syn => {
+//                    if let Some(_) = self.incoming_packet_tx_map.get(&packet.connection_id) {
+//                        // Connection ID collides with existing connection, so ignore
+//                        continue;
+//                    }
+
+//                    let (new_incoming_tx, new_incoming_rx) = unbounded_channel();
+//                    self.incoming_packet_tx_map
+//                        .insert(packet.connection_id, new_incoming_tx.clone());
+//                    self.connection_queue.push(Connection::new(
+//                        ConnectionState::Pending,
+//                        self.outbound_packet_tx.clone(),
+//                        new_incoming_rx,
+//                    ));
+
+//                    // TODO: Negotiate new connection with client
+//                    new_incoming_tx.send(packet).unwrap();
+//                }
+//                _ => todo!(),
+//            }
+//        }
+//    }
+//}
