@@ -148,17 +148,21 @@ impl From<Packet> for Bytes {
         result.put_u32(packet.window_size);
         result.put_u16(packet.seq_number);
         result.put_u16(packet.ack_number);
-        let mut has_extensions = false;
-        for extension in packet.extensions {
-            has_extensions = true;
-            result.put_u8(extension.extension_type.into());
+
+        // Linked list of packet extensions. Each extension header contains the type byte
+        // of the next extension in the list, or 0 if there are no more extensions.
+        for i in 0..packet.extensions.len() {
+            result.put_u8(
+                packet
+                    .extensions
+                    .get(i + 1)
+                    .map_or(0, |e| e.extension_type.into()),
+            );
+            let extension = &packet.extensions[i];
             result.put_u8(extension.data.len() as u8);
-            result.put(extension.data);
+            result.put(extension.data.as_ref());
         }
-        if has_extensions {
-            // end extensions with a zero byte
-            result.put_u8(0);
-        }
+
         result.put(packet.data);
         result.freeze()
     }
@@ -190,22 +194,21 @@ impl TryFrom<Bytes> for Packet {
 
         // End of packet header, now we check for extensions
 
-        // If any extensions are specified, consume the first extension's 'type' byte.
-        //
-        // NOTE: We do this because in practice the first extension's type byte is usually just
-        // zero, even if the type was specified as nonzero in the packet header. In this case, the
-        // packet header takes precedence.
-        if first_extension_type != ExtensionType::None.into() {
-            if bytes.has_remaining() {
-                bytes.advance(1);
-            } else {
-                return Err(PacketParseError::ExpectedExtension(0).into());
-            }
-        }
-
         let mut extensions = vec![];
         let mut extension_number = 0;
         let mut extension_type = first_extension_type;
+
+        // Store the type byte of the next extension in the list. If this is zero, that
+        // means the current extension is the last one in the list.
+        let mut next_extension_type = if extension_type != 0 {
+            if bytes.has_remaining() {
+                bytes.get_u8()
+            } else {
+                return Err(PacketParseError::MissingExtension(0).into());
+            }
+        } else {
+            0
+        };
 
         loop {
             match ExtensionType::from(extension_type) {
@@ -216,18 +219,13 @@ impl TryFrom<Bytes> for Packet {
                     // of 2 or 3, so this apparently isn't enforced.
 
                     if !bytes.has_remaining() {
-                        return Err(PacketParseError::ExtensionTooSmall {
-                            index: extension_number,
-                            expected: 2,
-                            actual: 1,
-                        }
-                        .into());
+                        return Err(PacketParseError::MissingExtension(extension_number).into());
                     }
 
                     let length = bytes.get_u8() as usize;
 
                     if length > bytes.remaining() {
-                        return Err(PacketParseError::ExtensionLengthTooLarge {
+                        return Err(PacketParseError::IncompleteExtension {
                             index: extension_number,
                             length,
                             remaining: bytes.remaining(),
@@ -241,11 +239,11 @@ impl TryFrom<Bytes> for Packet {
             }
 
             extension_number += 1;
+            extension_type = next_extension_type;
 
-            if bytes.has_remaining() {
-                extension_type = bytes.get_u8();
-            } else {
-                return Err(PacketParseError::ExpectedExtension(extension_number).into());
+            // Don't consume the next byte unless we're expecting another extension
+            if next_extension_type != 0 && bytes.has_remaining() {
+                next_extension_type = bytes.get_u8();
             }
         }
 
@@ -315,9 +313,7 @@ mod tests {
                  0x00, 0x00, 0x10, 0x00,
                  0x00, 0x00, 0x00, 0x00,
                  // selective ack extension with bitfield
-                 0x01, 0x04, 0x00, 0x01, 0x00, 0x01,
-                 // end extensions
-                 0x00]
+                 0x00, 0x04, 0x00, 0x01, 0x00, 0x01]
         );
     }
 
@@ -355,9 +351,7 @@ mod tests {
                  0x00, 0x00, 0x10, 0x00,
                  0x00, 0x00, 0x00, 0x00,
                  // selective ack extension with bitfield
-                 0x01, 0x04, 0x00, 0x01, 0x00, 0x01,
-                 // end extensions
-                 0x00,
+                 0x00, 0x04, 0x00, 0x01, 0x00, 0x01,
                  // data
                  0x01, 0x02, 0x03, 0x04, 0x05]
         );
@@ -391,11 +385,9 @@ mod tests {
                  0x00, 0x00, 0x10, 0x00,
                  0x00, 0x00, 0x00, 0x00,
                  // 3 extension segments
-                 0x01, 0x04, 0x00, 0x01, 0x00, 0x01,
-                 0x02, 0x04, 0x01, 0x00, 0x00, 0x01,
-                 0x03, 0x04, 0x00, 0x01, 0x01, 0x00,
-                 // end extensions
-                 0x00]
+                 0x02, 0x04, 0x00, 0x01, 0x00, 0x01,
+                 0x03, 0x04, 0x01, 0x00, 0x00, 0x01,
+                 0x00, 0x04, 0x00, 0x01, 0x01, 0x00]
         );
     }
 
@@ -469,9 +461,7 @@ mod tests {
                   0x00, 0x00, 0x10, 0x00,
                   0x00, 0x00, 0x00, 0x00,
                   // selective ack extension with bitfield
-                  0x01, 0x04, 0x00, 0x01, 0x00, 0x01,
-                  // end extensions
-                  0x00])).unwrap(),
+                  0x00, 0x04, 0x00, 0x01, 0x00, 0x01])).unwrap(),
             new_packet(
                 vec![Extension::new(
                     ExtensionType::SelectiveAck,
@@ -493,9 +483,7 @@ mod tests {
                   0x00, 0x00, 0x10, 0x00,
                   0x00, 0x00, 0x00, 0x00,
                   // made-up extension with length 3
-                  0xff, 0x03, 0x00, 0x01, 0x00,
-                  // end extensions
-                  0x00])).unwrap(),
+                  0x00, 0x03, 0x00, 0x01, 0x00])).unwrap(),
             new_packet(
                 vec![Extension::new(
                     ExtensionType::Unknown(0xff),
@@ -510,19 +498,6 @@ mod tests {
     fn from_non_conforming_bytes_with_extension_test() {
         // This tests behavior that doesn't conform to the protocol spec
 
-        // This is ok because we skip the type of the first extension in the list
-        #[rustfmt::skip]
-        assert!(
-            Packet::try_from(Bytes::from_static(
-                // say extension type is 1, but give extension type 2
-                &[0x02 << 4 | 0x01, 0x01, 0x30, 0x39,
-                  0x00, 0x03, 0xc4, 0x1a,
-                  0x00, 0x00, 0x00, 0x28,
-                  0x00, 0x00, 0x10, 0x00,
-                  0x00, 0x00, 0x00, 0x00,
-                  0x02, 0x00, 0x00])).is_ok()
-        );
-
         // This is ok because the length % 4 == 0 check is not enforced in practice
         #[rustfmt::skip]
         assert!(
@@ -534,7 +509,7 @@ mod tests {
                   0x00, 0x00, 0x10, 0x00,
                   0x00, 0x00, 0x00, 0x00,
                   // length is 1 rather than minimum of 4
-                  0x01, 0x01, 0xff, 0x00])).is_ok()
+                  0x00, 0x01, 0xff])).is_ok()
         );
     }
 
@@ -549,19 +524,19 @@ mod tests {
                   0x00, 0x00, 0x00, 0x28,
                   0x00, 0x00, 0x10, 0x00,
                   0x00, 0x00, 0x00, 0x00,
-                  0xff, 0x02, 0x00])).is_err()
+                  0x00, 0x02, 0xab])).is_err()
         );
 
         #[rustfmt::skip]
         assert!(
             Packet::try_from(Bytes::from_static(
-                // missing a 0x00 at end of extension list
+                // missing an extension
                 &[0x02 << 4 | 0x01, 0xff, 0x30, 0x39,
                   0x00, 0x03, 0xc4, 0x1a,
                   0x00, 0x00, 0x00, 0x28,
                   0x00, 0x00, 0x10, 0x00,
                   0x00, 0x00, 0x00, 0x00,
-                  0xff, 0x01, 0x00])).is_err()
+                  0x02, 0x01, 0x00])).is_err()
         );
     }
 
@@ -595,9 +570,7 @@ mod tests {
                   0x00, 0x00, 0x10, 0x00,
                   0x00, 0x00, 0x00, 0x00,
                   // 'close reason' extension with random data
-                  0x03, 0x04, 0x00, 0x01, 0x00, 0x01,
-                  // end extensions
-                  0x00,
+                  0x00, 0x04, 0x00, 0x01, 0x00, 0x01,
                   // data
                   0x01, 0x02, 0x03, 0x04, 0x05])).unwrap(),
             new_packet(
