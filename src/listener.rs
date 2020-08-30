@@ -6,7 +6,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures_util::{future::LocalBoxFuture, ready, stream::Stream};
+use futures_core::{future::LocalBoxFuture, ready, stream::Stream};
 use tokio::{
     net::ToSocketAddrs,
     sync::{

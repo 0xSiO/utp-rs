@@ -5,7 +5,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use futures_util::{future::LocalBoxFuture, stream::Stream};
+use futures_core::{future::LocalBoxFuture, stream::Stream};
 use tokio::sync::{mpsc::UnboundedReceiver, Mutex};
 
 use crate::{error::*, packet::Packet, router::Router, socket::UtpSocket};
