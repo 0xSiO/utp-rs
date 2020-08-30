@@ -1,6 +1,6 @@
 mod connection;
 pub mod error;
-mod listener;
+pub mod listener;
 mod packet;
 mod router;
 mod socket;

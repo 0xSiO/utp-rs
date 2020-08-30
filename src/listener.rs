@@ -142,6 +142,7 @@ impl Stream for UtpListener {
                         let socket = Arc::clone(&self.socket);
                         return Poll::Ready(Some(Ok(Connection::new(
                             Arc::clone(&self.socket),
+                            packet.connection_id,
                             addr,
                             false,
                             Arc::clone(&self.router),
