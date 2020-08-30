@@ -14,7 +14,6 @@ pub struct Connection {
     socket: Arc<Mutex<UtpSocket>>,
     connection_id: u16,
     remote_addr: SocketAddr,
-    established: bool,
     router: Arc<Router>,
     packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
     // TODO: Double-check lifetimes of boxed futures
@@ -27,7 +26,6 @@ impl Connection {
         socket: Arc<Mutex<UtpSocket>>,
         connection_id: u16,
         remote_addr: SocketAddr,
-        established: bool,
         router: Arc<Router>,
         packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
         read_future: Option<LocalBoxFuture<'static, Result<(Packet, SocketAddr)>>>,
@@ -37,7 +35,6 @@ impl Connection {
             socket,
             connection_id,
             remote_addr,
-            established,
             router,
             packet_rx,
             read_future,
@@ -79,21 +76,20 @@ impl Stream for Connection {
         };
 
         match result {
-            Ok((packet, addr)) => match packet.packet_type {
-                _ => {
-                    if packet.connection_id != self.connection_id {
-                        // This packet isn't meant for us
-                        self.router.route(packet, addr);
-                        return Poll::Pending;
-                    }
-
-                    if self.remote_addr != addr {
-                        // Somehow we got this packet from an unfamiliar address
-                        // TODO: Log this event and drop the packet?
-                    }
-                    todo!()
+            Ok((packet, addr)) => {
+                if packet.connection_id != self.connection_id {
+                    // This packet isn't meant for us
+                    self.router.route(packet, addr);
+                    return Poll::Pending;
                 }
-            },
+
+                if self.remote_addr != addr {
+                    // Somehow we got this packet from an unfamiliar address
+                    // TODO: Log this event and drop the packet?
+                }
+
+                todo!()
+            }
             Err(err) => return Poll::Ready(Some(Err(err))),
         }
     }

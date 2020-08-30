@@ -144,7 +144,6 @@ impl Stream for UtpListener {
                             Arc::clone(&self.socket),
                             packet.connection_id,
                             addr,
-                            false,
                             Arc::clone(&self.router),
                             connection_rx,
                             None,
