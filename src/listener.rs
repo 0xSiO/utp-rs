@@ -10,7 +10,7 @@ use futures_util::{future::LocalBoxFuture, ready, stream::Stream};
 use tokio::{
     net::ToSocketAddrs,
     sync::{
-        mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+        mpsc::{unbounded_channel, UnboundedReceiver},
         Mutex,
     },
 };
@@ -78,16 +78,6 @@ pub struct UtpListener {
 
 impl UtpListener {
     /// Creates a new UtpListener, which will be bound to the specified address.
-    ///
-    /// The returned listener is ready to begin listening for incoming messages.
-    ///
-    /// Binding with a port number of 0 will request that the OS assigns a port to this
-    /// listener. The port allocated can be queried via the local_addr method.
-    ///
-    /// If addr yields multiple addresses, bind will be attempted with each of the
-    /// addresses until one succeeds and returns the listener. If none of the addresses
-    /// succeed in creating a listener, the error returned from the last attempt (the last
-    /// address) is returned.
     pub async fn bind(addr: impl ToSocketAddrs) -> Result<Self> {
         let (syn_packet_tx, syn_packet_rx) = unbounded_channel();
         let connection_manager = ConnectionManager::new(Default::default(), syn_packet_tx);
