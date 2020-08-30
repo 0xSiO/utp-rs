@@ -46,6 +46,14 @@ mod socket;
 // handshake process by adding an entry to the packet router's DashMap, then return a new
 // connection that has a pending future to write an ACK for the received SYN to the
 // socket.
+//
+// To act as a client, we have to connect to a UTP server. What we can do is add a method
+// to Connection that produces a connection to a remote socket. This connection would
+// share ownership of a Router with other connections. The only difference from the
+// server model is that there would be no need for a listener object. In practice,
+// however, we usually have a server and a client on the same port, so we can simply
+// register the new client connection to the existing router. They're all duplex
+// connections anyway, so there's no functional difference between them.
 
 #[cfg(test)]
 mod tests {
