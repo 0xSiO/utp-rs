@@ -7,10 +7,14 @@ use std::{
 };
 
 use futures_util::{future::LocalBoxFuture, ready, stream::Stream};
-use tokio::sync::{mpsc::UnboundedReceiver, Mutex};
+use tokio::sync::{
+    mpsc::{unbounded_channel, UnboundedReceiver},
+    Mutex,
+};
 
 use crate::{error::*, packet::Packet, router::Router, socket::UtpSocket};
 
+// TODO: Need to figure out a plan to deal with lost packets
 pub struct Connection {
     socket: Arc<Mutex<UtpSocket>>,
     connection_id: u16,
@@ -23,6 +27,31 @@ pub struct Connection {
 }
 
 impl Connection {
+    pub fn generate(
+        socket: Arc<Mutex<UtpSocket>>,
+        router: Arc<Router>,
+        remote_addr: SocketAddr,
+    ) -> Self {
+        let (packet_tx, packet_rx) = unbounded_channel();
+        let mut connection_id = 0;
+        while router.has_channel(connection_id) {
+            // TODO: Checked addition?
+            connection_id += 1;
+        }
+        let success = router.set_channel(connection_id, packet_tx);
+        debug_assert!(success);
+
+        Self {
+            socket,
+            connection_id,
+            remote_addr,
+            router,
+            packet_rx,
+            read_future: None,
+            write_future: None, // TODO: Write SYN packet to remote socket
+        }
+    }
+
     pub fn new(
         socket: Arc<Mutex<UtpSocket>>,
         connection_id: u16,

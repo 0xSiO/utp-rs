@@ -21,6 +21,10 @@ impl Router {
         }
     }
 
+    pub fn has_channel(&self, id: u16) -> bool {
+        self.connection_states.contains_key(&id)
+    }
+
     pub fn get_channel(
         &self,
         id: u16,
