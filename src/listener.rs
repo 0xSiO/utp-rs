@@ -5,13 +5,8 @@ use std::{
     task::{Context, Poll},
 };
 
-use crossbeam_deque::Injector;
-use dashmap::{DashMap, ElementGuard};
-use futures_util::{
-    future::{FutureExt, LocalBoxFuture},
-    ready,
-    stream::Stream,
-};
+use bytes::Bytes;
+use futures_util::{future::LocalBoxFuture, ready, stream::Stream};
 use tokio::{
     net::ToSocketAddrs,
     sync::{
@@ -21,6 +16,8 @@ use tokio::{
 };
 
 use crate::{
+    connection::{Connection, ConnectionState},
+    connection_manager::ConnectionManager,
     error::*,
     packet::{Packet, PacketType},
     UtpSocket,
@@ -71,75 +68,6 @@ use crate::{
 //
 // All connection states are held inside a single DashMap, where the values are of some
 // type `ConnectionState`
-
-pub struct ConnectionState {
-    remote_addr: SocketAddr,
-    established: bool,
-}
-
-impl ConnectionState {
-    pub fn new(remote_addr: SocketAddr, established: bool) -> Self {
-        Self {
-            remote_addr,
-            established,
-        }
-    }
-}
-
-pub struct Connection {
-    socket: Arc<Mutex<UtpSocket>>,
-    manager: Arc<ConnectionManager>,
-    packet_rx: UnboundedReceiver<Packet>,
-    // TODO: Double-check lifetimes of boxed futures
-    read_future: Option<LocalBoxFuture<'static, Packet>>,
-    write_future: Option<LocalBoxFuture<'static, Packet>>,
-}
-
-impl Stream for Connection {
-    type Item = (); // some "message" type
-
-    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Option<Self::Item>> {
-        todo!()
-    }
-}
-
-pub struct ConnectionManager {
-    connection_states: DashMap<u16, ConnectionState>,
-    syn_packet_tx: UnboundedSender<(Packet, SocketAddr)>,
-}
-
-impl ConnectionManager {
-    pub fn new(
-        connection_states: DashMap<u16, ConnectionState>,
-        syn_packet_tx: UnboundedSender<(Packet, SocketAddr)>,
-    ) -> Self {
-        Self {
-            connection_states,
-            syn_packet_tx,
-        }
-    }
-
-    pub fn get_state(&self, id: u16) -> Option<ElementGuard<u16, ConnectionState>> {
-        self.connection_states.get(&id)
-    }
-
-    pub fn set_state(&self, id: u16, state: ConnectionState) -> bool {
-        if self.connection_states.contains_key(&id) {
-            false
-        } else {
-            // TODO: This could cause a bug where state is mysteriously overridden
-            //       If this is a problem, consider using Arc<Mutex<HashMap>>
-            let success = self.connection_states.insert(id, state);
-            // Make absolutely sure the state didn't already exist
-            debug_assert!(success);
-            true
-        }
-    }
-
-    pub fn route(&self, packet: Packet) {
-        todo!()
-    }
-}
 
 pub struct UtpListener {
     socket: Arc<Mutex<UtpSocket>>,
@@ -231,19 +159,36 @@ impl Stream for UtpListener {
         match result {
             Ok((packet, addr)) => match packet.packet_type {
                 PacketType::Syn => {
-                    let new_state = ConnectionState::new(addr.clone(), false);
+                    let (connection_tx, connection_rx) = unbounded_channel();
+                    let new_state = ConnectionState::new(addr.clone(), false, connection_tx);
                     if self
                         .connection_manager
                         .set_state(packet.connection_id, new_state)
                     {
-                        // TODO: Craft state packet to respond to SYN
-                        // let state_packet = Packet::new();
-                        // let socket = Arc::clone(&self.socket);
-                        // self.write_future = Some(Box::pin(async move {
-                        //     let mut socket = socket.lock().await;
-                        //     socket.send_to(state_packet, addr).await
-                        // }));
-                        return Poll::Pending;
+                        // TODO: Craft valid state packet to respond to SYN
+                        let state_packet = Packet::new(
+                            PacketType::State,
+                            1,
+                            packet.connection_id,
+                            0,
+                            0,
+                            0,
+                            0,
+                            0,
+                            vec![],
+                            Bytes::new(),
+                        );
+                        let socket = Arc::clone(&self.socket);
+                        return Poll::Ready(Some(Ok(Connection::new(
+                            Arc::clone(&self.socket),
+                            Arc::clone(&self.connection_manager),
+                            connection_rx,
+                            None,
+                            Some(Box::pin(async move {
+                                let mut socket = socket.lock().await;
+                                socket.send_to(state_packet, addr).await
+                            })),
+                        ))));
                     } else {
                         // If we already have state for the connection ID, skip the packet
                         return Poll::Pending;

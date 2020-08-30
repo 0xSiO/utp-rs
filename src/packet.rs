@@ -100,7 +100,7 @@ pub struct Packet {
 }
 
 impl Packet {
-    fn new(
+    pub(crate) fn new(
         packet_type: PacketType,
         version: u8,
         connection_id: u16,
