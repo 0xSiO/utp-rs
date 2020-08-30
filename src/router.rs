@@ -34,9 +34,9 @@ impl Router {
         } else {
             // TODO: This could cause a bug where state is mysteriously overridden
             //       If this is a problem, consider using Arc<Mutex<HashMap>>
-            let success = self.connection_states.insert(id, state);
+            let result = self.connection_states.replace(id, state);
             // Make absolutely sure the state didn't already exist
-            debug_assert!(success);
+            debug_assert!(result.is_none());
             true
         }
     }

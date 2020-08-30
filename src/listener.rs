@@ -6,7 +6,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures_core::{future::LocalBoxFuture, ready, stream::Stream};
+use futures_util::{future::BoxFuture, ready, stream::Stream};
 use tokio::{
     net::ToSocketAddrs,
     sync::{
@@ -27,7 +27,7 @@ pub struct UtpListener {
     socket: Arc<Mutex<UtpSocket>>,
     syn_packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
     router: Arc<Router>,
-    read_future: Option<LocalBoxFuture<'static, Result<(Packet, SocketAddr)>>>,
+    read_future: Option<BoxFuture<'static, Result<(Packet, SocketAddr)>>>,
 }
 
 impl UtpListener {

@@ -1,11 +1,12 @@
 use std::{
+    fmt,
     net::SocketAddr,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
 };
 
-use futures_core::{future::LocalBoxFuture, ready, stream::Stream};
+use futures_util::{future::LocalBoxFuture, ready, stream::Stream};
 use tokio::sync::{mpsc::UnboundedReceiver, Mutex};
 
 use crate::{error::*, packet::Packet, router::Router, socket::UtpSocket};
@@ -88,9 +89,19 @@ impl Stream for Connection {
                     // TODO: Log this event and drop the packet?
                 }
 
+                println!("Connection {} got packet: {:?}", self.connection_id, packet);
                 todo!()
             }
             Err(err) => return Poll::Ready(Some(Err(err))),
         }
+    }
+}
+
+impl fmt::Debug for Connection {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_fmt(format_args!(
+            "Connection {{ connection_id: {}, remote_addr: {} }}",
+            self.connection_id, self.remote_addr
+        ))
     }
 }

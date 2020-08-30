@@ -46,3 +46,28 @@ mod socket;
 // handshake process by adding an entry to the packet router's DashMap, then return a new
 // connection that has a pending future to write an ACK for the received SYN to the
 // socket.
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use futures_util::stream::StreamExt;
+
+    use super::*;
+    use listener::UtpListener;
+    use packet::{Packet, PacketType};
+    use socket::UtpSocket;
+
+    #[tokio::test]
+    async fn basic_connection_test() {
+        let task = tokio::spawn(async {
+            let mut server = UtpListener::bind("localhost:5000").await.unwrap();
+            let conn = server.next().await.unwrap();
+            assert!(conn.is_ok());
+        });
+        #[rustfmt::skip]
+        let syn = Packet::new(PacketType::Syn, 1, 10, 20, 0, 30, 1, 0, vec![], Bytes::new());
+        let mut client = UtpSocket::bind("localhost:5001").await.unwrap();
+        client.send_to(syn, "localhost:5000").await.unwrap();
+        task.await.unwrap();
+    }
+}
