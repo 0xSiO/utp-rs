@@ -16,11 +16,11 @@ use tokio::{
 };
 
 use crate::{
-    connection::{Connection, ConnectionState},
-    connection_manager::ConnectionManager,
+    connection::Connection,
+    connection_manager::{ConnectionManager, ConnectionState},
     error::*,
     packet::{Packet, PacketType},
-    UtpSocket,
+    socket::UtpSocket,
 };
 
 // General idea of how this might work:

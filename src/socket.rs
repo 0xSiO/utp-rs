@@ -3,7 +3,7 @@ use std::{convert::TryFrom, net::SocketAddr};
 use bytes::{Bytes, BytesMut};
 use tokio::net::{ToSocketAddrs, UdpSocket};
 
-use crate::{error::*, Packet};
+use crate::{error::*, packet::Packet};
 
 // Ethernet MTU minus IP/UDP header sizes. TODO: Use path MTU discovery
 const MAX_DATAGRAM_SIZE: usize = 1472;

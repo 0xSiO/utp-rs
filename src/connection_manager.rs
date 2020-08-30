@@ -3,7 +3,27 @@ use std::net::SocketAddr;
 use dashmap::{DashMap, ElementGuard};
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::{connection::ConnectionState, Packet};
+use crate::packet::Packet;
+
+pub struct ConnectionState {
+    remote_addr: SocketAddr,
+    established: bool,
+    packet_tx: UnboundedSender<Packet>,
+}
+
+impl ConnectionState {
+    pub fn new(
+        remote_addr: SocketAddr,
+        established: bool,
+        packet_tx: UnboundedSender<Packet>,
+    ) -> Self {
+        Self {
+            remote_addr,
+            established,
+            packet_tx,
+        }
+    }
+}
 
 pub struct ConnectionManager {
     connection_states: DashMap<u16, ConnectionState>,

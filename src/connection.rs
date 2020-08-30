@@ -6,32 +6,9 @@ use std::{
 };
 
 use futures_util::{future::LocalBoxFuture, stream::Stream};
-use tokio::sync::{
-    mpsc::{UnboundedReceiver, UnboundedSender},
-    Mutex,
-};
+use tokio::sync::{mpsc::UnboundedReceiver, Mutex};
 
-use crate::{connection_manager::ConnectionManager, error::*, packet::Packet, UtpSocket};
-
-pub struct ConnectionState {
-    remote_addr: SocketAddr,
-    established: bool,
-    packet_tx: UnboundedSender<Packet>,
-}
-
-impl ConnectionState {
-    pub fn new(
-        remote_addr: SocketAddr,
-        established: bool,
-        packet_tx: UnboundedSender<Packet>,
-    ) -> Self {
-        Self {
-            remote_addr,
-            established,
-            packet_tx,
-        }
-    }
-}
+use crate::{connection_manager::ConnectionManager, error::*, packet::Packet, socket::UtpSocket};
 
 pub struct Connection {
     socket: Arc<Mutex<UtpSocket>>,
