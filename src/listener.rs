@@ -17,7 +17,7 @@ use tokio::{
 
 use crate::{
     connection::Connection,
-    connection_manager::{ConnectionManager, ConnectionState},
+    connection_manager::ConnectionManager,
     error::*,
     packet::{Packet, PacketType},
     socket::UtpSocket,
@@ -126,10 +126,9 @@ impl Stream for UtpListener {
             Ok((packet, addr)) => match packet.packet_type {
                 PacketType::Syn => {
                     let (connection_tx, connection_rx) = unbounded_channel();
-                    let new_state = ConnectionState::new(connection_tx);
                     if self
                         .connection_manager
-                        .set_state(packet.connection_id, new_state)
+                        .set_channel(packet.connection_id, connection_tx)
                     {
                         // TODO: Craft valid state packet to respond to SYN
                         let state_packet = Packet::new(

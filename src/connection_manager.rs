@@ -5,25 +5,14 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::packet::{Packet, PacketType};
 
-// TODO: Do we need this struct?
-pub struct ConnectionState {
-    packet_tx: UnboundedSender<(Packet, SocketAddr)>,
-}
-
-impl ConnectionState {
-    pub fn new(packet_tx: UnboundedSender<(Packet, SocketAddr)>) -> Self {
-        Self { packet_tx }
-    }
-}
-
 pub struct ConnectionManager {
-    connection_states: DashMap<u16, ConnectionState>,
+    connection_states: DashMap<u16, UnboundedSender<(Packet, SocketAddr)>>,
     syn_packet_tx: UnboundedSender<(Packet, SocketAddr)>,
 }
 
 impl ConnectionManager {
     pub fn new(
-        connection_states: DashMap<u16, ConnectionState>,
+        connection_states: DashMap<u16, UnboundedSender<(Packet, SocketAddr)>>,
         syn_packet_tx: UnboundedSender<(Packet, SocketAddr)>,
     ) -> Self {
         Self {
@@ -32,11 +21,14 @@ impl ConnectionManager {
         }
     }
 
-    pub fn get_state(&self, id: u16) -> Option<ElementGuard<u16, ConnectionState>> {
+    pub fn get_channel(
+        &self,
+        id: u16,
+    ) -> Option<ElementGuard<u16, UnboundedSender<(Packet, SocketAddr)>>> {
         self.connection_states.get(&id)
     }
 
-    pub fn set_state(&self, id: u16, state: ConnectionState) -> bool {
+    pub fn set_channel(&self, id: u16, state: UnboundedSender<(Packet, SocketAddr)>) -> bool {
         if self.connection_states.contains_key(&id) {
             false
         } else {
@@ -50,9 +42,9 @@ impl ConnectionManager {
     }
 
     pub fn route(&self, packet: Packet, addr: SocketAddr) {
-        match self.connection_states.get(&packet.connection_id) {
-            Some(state) => {
-                match state.value().packet_tx.send((packet, addr)) {
+        match self.get_channel(packet.connection_id) {
+            Some(element) => {
+                match element.value().send((packet, addr)) {
                     Ok(()) => {}
                     Err(_) => {} // TODO: The receiver is gone, so this state is stale?
                 }
