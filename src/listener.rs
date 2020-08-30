@@ -74,7 +74,6 @@ pub struct UtpListener {
     syn_packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
     connection_manager: Arc<ConnectionManager>,
     read_future: Option<LocalBoxFuture<'static, Result<(Packet, SocketAddr)>>>,
-    write_future: Option<LocalBoxFuture<'static, Result<usize>>>,
 }
 
 impl UtpListener {
@@ -97,7 +96,6 @@ impl UtpListener {
             syn_packet_rx,
             connection_manager: Arc::new(connection_manager),
             read_future: None,
-            write_future: None,
         })
     }
 }
@@ -108,33 +106,12 @@ impl Stream for UtpListener {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         // TODO: Confirm desired behavior. This is what the below logic currently does:
         //
-        // Check for writes:
-        // - if we have a pending future to write to the socket, poll that
-        //   - if this gives an Ok, continue to next section
-        //   - else, return an error
-        //
-        // Check for reads:
         // - if there is a SYN packet in our buffered channel, extract the packet and address
         // - else if there is a pending future to read from the socket, poll it with `ready!`
         //   - if this gives us a result, extract the packet and address
         // - else, create a future to read from the socket and poll it with `ready!`
         //   - if this gives us a result, extract the packet and address
-        //
-        // At this point we are guaranteed to have a packet and an address.
-        // - TODO: If we need to write a response to the socket, create a future to do so
-        //         and return pending
-
-        // TODO: This only lets us write one packet at a time. Maybe we want to queue writes
-        if self.write_future.is_some() {
-            if let Poll::Ready(result) = self.write_future.as_mut().unwrap().as_mut().poll(cx) {
-                // Remove the finished future
-                self.write_future.take();
-                match result {
-                    Ok(_) => {}
-                    Err(err) => return Poll::Ready(Some(Err(err))),
-                }
-            }
-        }
+        // - we are now guaranteed to have a packet and an address.
 
         let result = if let Poll::Ready(Some((packet, addr))) = self.syn_packet_rx.poll_recv(cx) {
             Ok((packet, addr))
