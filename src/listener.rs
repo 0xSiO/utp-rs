@@ -23,51 +23,6 @@ use crate::{
     socket::UtpSocket,
 };
 
-// General idea of how this might work:
-//
-// Inside the listener:
-// - A remote peer sends us a UDP datagram containing a uTP packet.
-// - ??? (some structure or task needs to read incoming packets)
-// - We deserialize the packet and examine its type.
-//   - if it's a SYN packet, check to see if we already have a matching connection
-//     - if we're already connected, ignore this packet
-//     - else, begin the handshake process to set up a new connection. Channels to
-//       connections are stored in a HashMap, identified by the 16-bit connection ID in
-//       the packet header.
-//   - if not SYN, route the packet to an existing connection, or send a RESET if there is
-//     no existing connection.
-//
-// Inside a given connection:
-// - ??? (some structure or task needs to read the routed packet)
-// - handle the routed packet, updating any internal buffers and connection state
-
-// New plan!
-//
-// Implement Stream for listener and connection, returning Poll::Pending as quickly as
-// possible if unable to make fast progress.
-//
-// We have a Router, which tracks the state of all connections. It has a DashMap of
-// connection IDs to connection state structures, which contain details about each
-// connection, as well as a channel through which we can send packets to the connection.
-//
-// Connections implement Stream<Message>, with data that comes from one or more packets.
-//
-// Each connection shares access to the underlying socket. When a connection wants to
-// read a packet, it stores a future to read the socket, and polls it. If a packet is
-// received, we check the connection ID field. If it doesn't match the current
-// connection's ID, then we route the packet through the packet router, which sends
-// the packet to the corresponding connection through a channel. When a connection is
-// dropped, it removes its state entry from the DashMap.
-//
-// We can get connections using the listener by implementing Stream<Connection>. If the
-// next packet is a SYN, initiate the handshake process by adding an entry to the
-// packet router's DashMap, then return Poll::Pending. The next time the listener
-// is polled, we can advance the state of pending connections by modifying the entries in
-// the packet router's DashMap, and returning Poll::Pending if not yet ready.
-//
-// All connection states are held inside a single DashMap, where the values are of some
-// type `ConnectionState`
-
 pub struct UtpListener {
     socket: Arc<Mutex<UtpSocket>>,
     syn_packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
