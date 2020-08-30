@@ -126,7 +126,7 @@ impl Stream for UtpListener {
             Ok((packet, addr)) => match packet.packet_type {
                 PacketType::Syn => {
                     let (connection_tx, connection_rx) = unbounded_channel();
-                    let new_state = ConnectionState::new(addr.clone(), false, connection_tx);
+                    let new_state = ConnectionState::new(connection_tx);
                     if self
                         .connection_manager
                         .set_state(packet.connection_id, new_state)
@@ -147,6 +147,8 @@ impl Stream for UtpListener {
                         let socket = Arc::clone(&self.socket);
                         return Poll::Ready(Some(Ok(Connection::new(
                             Arc::clone(&self.socket),
+                            addr,
+                            false,
                             Arc::clone(&self.connection_manager),
                             connection_rx,
                             None,

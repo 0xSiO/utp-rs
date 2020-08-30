@@ -12,8 +12,10 @@ use crate::{connection_manager::ConnectionManager, error::*, packet::Packet, soc
 
 pub struct Connection {
     socket: Arc<Mutex<UtpSocket>>,
+    remote_addr: SocketAddr,
+    established: bool,
     manager: Arc<ConnectionManager>,
-    packet_rx: UnboundedReceiver<Packet>,
+    packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
     // TODO: Double-check lifetimes of boxed futures
     read_future: Option<LocalBoxFuture<'static, Result<(Packet, SocketAddr)>>>,
     write_future: Option<LocalBoxFuture<'static, Result<usize>>>,
@@ -22,13 +24,17 @@ pub struct Connection {
 impl Connection {
     pub fn new(
         socket: Arc<Mutex<UtpSocket>>,
+        remote_addr: SocketAddr,
+        established: bool,
         manager: Arc<ConnectionManager>,
-        packet_rx: UnboundedReceiver<Packet>,
+        packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
         read_future: Option<LocalBoxFuture<'static, Result<(Packet, SocketAddr)>>>,
         write_future: Option<LocalBoxFuture<'static, Result<usize>>>,
     ) -> Self {
         Self {
             socket,
+            remote_addr,
+            established,
             manager,
             packet_rx,
             read_future,

@@ -3,25 +3,16 @@ use std::net::SocketAddr;
 use dashmap::{DashMap, ElementGuard};
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::packet::Packet;
+use crate::packet::{Packet, PacketType};
 
+// TODO: Do we need this struct?
 pub struct ConnectionState {
-    remote_addr: SocketAddr,
-    established: bool,
-    packet_tx: UnboundedSender<Packet>,
+    packet_tx: UnboundedSender<(Packet, SocketAddr)>,
 }
 
 impl ConnectionState {
-    pub fn new(
-        remote_addr: SocketAddr,
-        established: bool,
-        packet_tx: UnboundedSender<Packet>,
-    ) -> Self {
-        Self {
-            remote_addr,
-            established,
-            packet_tx,
-        }
+    pub fn new(packet_tx: UnboundedSender<(Packet, SocketAddr)>) -> Self {
+        Self { packet_tx }
     }
 }
 
@@ -58,7 +49,25 @@ impl ConnectionManager {
         }
     }
 
-    pub fn route(&self, packet: Packet) {
+    pub fn route(&self, packet: Packet, addr: SocketAddr) {
+        match self.connection_states.get(&packet.connection_id) {
+            Some(state) => {
+                match state.value().packet_tx.send((packet, addr)) {
+                    Ok(()) => {}
+                    Err(_) => {} // TODO: The receiver is gone, so this state is stale?
+                }
+            }
+            None => {
+                if let PacketType::Syn = packet.packet_type {
+                    match self.syn_packet_tx.send((packet, addr)) {
+                        Ok(()) => {}
+                        Err(_) => {} // TODO: The receiving end must be closed. Log this?
+                    }
+                } else {
+                    // TODO: Not a SYN, and we have no state. Send a reset packet?
+                }
+            }
+        }
         todo!()
     }
 }
