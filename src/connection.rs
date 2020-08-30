@@ -8,13 +8,13 @@ use std::{
 use futures_util::{future::LocalBoxFuture, stream::Stream};
 use tokio::sync::{mpsc::UnboundedReceiver, Mutex};
 
-use crate::{connection_manager::ConnectionManager, error::*, packet::Packet, socket::UtpSocket};
+use crate::{error::*, packet::Packet, router::Router, socket::UtpSocket};
 
 pub struct Connection {
     socket: Arc<Mutex<UtpSocket>>,
     remote_addr: SocketAddr,
     established: bool,
-    manager: Arc<ConnectionManager>,
+    router: Arc<Router>,
     packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
     // TODO: Double-check lifetimes of boxed futures
     read_future: Option<LocalBoxFuture<'static, Result<(Packet, SocketAddr)>>>,
@@ -26,7 +26,7 @@ impl Connection {
         socket: Arc<Mutex<UtpSocket>>,
         remote_addr: SocketAddr,
         established: bool,
-        manager: Arc<ConnectionManager>,
+        router: Arc<Router>,
         packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
         read_future: Option<LocalBoxFuture<'static, Result<(Packet, SocketAddr)>>>,
         write_future: Option<LocalBoxFuture<'static, Result<usize>>>,
@@ -35,7 +35,7 @@ impl Connection {
             socket,
             remote_addr,
             established,
-            manager,
+            router,
             packet_rx,
             read_future,
             write_future,

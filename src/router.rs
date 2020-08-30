@@ -5,12 +5,12 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::packet::{Packet, PacketType};
 
-pub struct ConnectionManager {
+pub struct Router {
     connection_states: DashMap<u16, UnboundedSender<(Packet, SocketAddr)>>,
     syn_packet_tx: UnboundedSender<(Packet, SocketAddr)>,
 }
 
-impl ConnectionManager {
+impl Router {
     pub fn new(
         connection_states: DashMap<u16, UnboundedSender<(Packet, SocketAddr)>>,
         syn_packet_tx: UnboundedSender<(Packet, SocketAddr)>,

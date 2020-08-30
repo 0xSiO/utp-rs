@@ -17,9 +17,9 @@ use tokio::{
 
 use crate::{
     connection::Connection,
-    connection_manager::ConnectionManager,
     error::*,
     packet::{Packet, PacketType},
+    router::Router,
     socket::UtpSocket,
 };
 
@@ -46,10 +46,9 @@ use crate::{
 // Implement Stream for listener and connection, returning Poll::Pending as quickly as
 // possible if unable to make fast progress.
 //
-// We have a ConnectionManager, which tracks the state of all connections. It has a
-// DashMap of connection IDs to connection state structures, which contain details
-// about each connection, as well as a channel through which we can send packets to the
-// connection.
+// We have a Router, which tracks the state of all connections. It has a DashMap of
+// connection IDs to connection state structures, which contain details about each
+// connection, as well as a channel through which we can send packets to the connection.
 //
 // Connections implement Stream<Message>, with data that comes from one or more packets.
 //
@@ -72,7 +71,7 @@ use crate::{
 pub struct UtpListener {
     socket: Arc<Mutex<UtpSocket>>,
     syn_packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
-    connection_manager: Arc<ConnectionManager>,
+    connection_manager: Arc<Router>,
     read_future: Option<LocalBoxFuture<'static, Result<(Packet, SocketAddr)>>>,
 }
 
@@ -80,7 +79,7 @@ impl UtpListener {
     /// Creates a new UtpListener, which will be bound to the specified address.
     pub async fn bind(addr: impl ToSocketAddrs) -> Result<Self> {
         let (syn_packet_tx, syn_packet_rx) = unbounded_channel();
-        let connection_manager = ConnectionManager::new(Default::default(), syn_packet_tx);
+        let connection_manager = Router::new(Default::default(), syn_packet_tx);
         Ok(UtpListener {
             socket: Arc::new(Mutex::new(UtpSocket::bind(addr).await?)),
             syn_packet_rx,
