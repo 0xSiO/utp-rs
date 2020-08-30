@@ -14,7 +14,9 @@ use tokio::sync::{
 
 use crate::{error::*, packet::Packet, router::Router, socket::UtpSocket};
 
-// TODO: Need to figure out a plan to deal with lost packets
+// TODO: Need to figure out a plan to deal with lost packets: one idea is to have a queue
+// of unacked packets, pass a reference into the write future, and access the queue from
+// the future... something like that
 pub struct Connection {
     socket: Arc<Mutex<UtpSocket>>,
     connection_id: u16,
