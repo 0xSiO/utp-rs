@@ -55,15 +55,15 @@ use crate::{
 // Each connection shares access to the underlying socket. When a connection wants to
 // read a packet, it stores a future to read the socket, and polls it. If a packet is
 // received, we check the connection ID field. If it doesn't match the current
-// connection's ID, then we route the packet through the connection manager, which sends
+// connection's ID, then we route the packet through the packet router, which sends
 // the packet to the corresponding connection through a channel. When a connection is
 // dropped, it removes its state entry from the DashMap.
 //
 // We can get connections using the listener by implementing Stream<Connection>. If the
 // next packet is a SYN, initiate the handshake process by adding an entry to the
-// connection manager's DashMap, then return Poll::Pending. The next time the listener
+// packet router's DashMap, then return Poll::Pending. The next time the listener
 // is polled, we can advance the state of pending connections by modifying the entries in
-// the connection manager's DashMap, and returning Poll::Pending if not yet ready.
+// the packet router's DashMap, and returning Poll::Pending if not yet ready.
 //
 // All connection states are held inside a single DashMap, where the values are of some
 // type `ConnectionState`
@@ -71,7 +71,7 @@ use crate::{
 pub struct UtpListener {
     socket: Arc<Mutex<UtpSocket>>,
     syn_packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
-    connection_manager: Arc<Router>,
+    router: Arc<Router>,
     read_future: Option<LocalBoxFuture<'static, Result<(Packet, SocketAddr)>>>,
 }
 
@@ -79,11 +79,11 @@ impl UtpListener {
     /// Creates a new UtpListener, which will be bound to the specified address.
     pub async fn bind(addr: impl ToSocketAddrs) -> Result<Self> {
         let (syn_packet_tx, syn_packet_rx) = unbounded_channel();
-        let connection_manager = Router::new(Default::default(), syn_packet_tx);
+        let router = Router::new(Default::default(), syn_packet_tx);
         Ok(UtpListener {
             socket: Arc::new(Mutex::new(UtpSocket::bind(addr).await?)),
             syn_packet_rx,
-            connection_manager: Arc::new(connection_manager),
+            router: Arc::new(router),
             read_future: None,
         })
     }
@@ -125,10 +125,7 @@ impl Stream for UtpListener {
             Ok((packet, addr)) => match packet.packet_type {
                 PacketType::Syn => {
                     let (connection_tx, connection_rx) = unbounded_channel();
-                    if self
-                        .connection_manager
-                        .set_channel(packet.connection_id, connection_tx)
-                    {
+                    if self.router.set_channel(packet.connection_id, connection_tx) {
                         // TODO: Craft valid state packet to respond to SYN
                         let state_packet = Packet::new(
                             PacketType::State,
@@ -147,7 +144,7 @@ impl Stream for UtpListener {
                             Arc::clone(&self.socket),
                             addr,
                             false,
-                            Arc::clone(&self.connection_manager),
+                            Arc::clone(&self.router),
                             connection_rx,
                             None,
                             Some(Box::pin(async move {
@@ -160,7 +157,10 @@ impl Stream for UtpListener {
                         return Poll::Pending;
                     }
                 }
-                _ => todo!(), // TODO: Route packet through connection manager
+                _ => {
+                    self.router.route(packet, addr);
+                    return Poll::Pending;
+                }
             },
             Err(err) => return Poll::Ready(Some(Err(err))),
         }
