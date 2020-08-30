@@ -71,7 +71,6 @@ use crate::{
 
 pub struct UtpListener {
     socket: Arc<Mutex<UtpSocket>>,
-    syn_packet_tx: UnboundedSender<(Packet, SocketAddr)>,
     syn_packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
     connection_manager: Arc<ConnectionManager>,
     read_future: Option<LocalBoxFuture<'static, Result<(Packet, SocketAddr)>>>,
@@ -92,11 +91,11 @@ impl UtpListener {
     /// address) is returned.
     pub async fn bind(addr: impl ToSocketAddrs) -> Result<Self> {
         let (syn_packet_tx, syn_packet_rx) = unbounded_channel();
+        let connection_manager = ConnectionManager::new(Default::default(), syn_packet_tx);
         Ok(UtpListener {
             socket: Arc::new(Mutex::new(UtpSocket::bind(addr).await?)),
-            syn_packet_tx: syn_packet_tx.clone(),
             syn_packet_rx,
-            connection_manager: Arc::new(ConnectionManager::new(Default::default(), syn_packet_tx)),
+            connection_manager: Arc::new(connection_manager),
             read_future: None,
             write_future: None,
         })

@@ -16,19 +16,19 @@ use crate::{connection_manager::ConnectionManager, error::*, packet::Packet, Utp
 pub struct ConnectionState {
     remote_addr: SocketAddr,
     established: bool,
-    incoming_packets: UnboundedSender<Packet>,
+    packet_tx: UnboundedSender<Packet>,
 }
 
 impl ConnectionState {
     pub fn new(
         remote_addr: SocketAddr,
         established: bool,
-        incoming_packets: UnboundedSender<Packet>,
+        packet_tx: UnboundedSender<Packet>,
     ) -> Self {
         Self {
             remote_addr,
             established,
-            incoming_packets,
+            packet_tx,
         }
     }
 }
