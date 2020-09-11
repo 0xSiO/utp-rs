@@ -6,8 +6,8 @@ use std::{
     task::{Context, Poll},
 };
 
+use flume::{unbounded, Receiver};
 use futures_util::{future::BoxFuture, ready, stream::Stream};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
 use crate::{error::*, packet::Packet, router::Router, socket::UtpSocket};
 
@@ -19,7 +19,7 @@ pub struct Connection {
     connection_id: u16,
     remote_addr: SocketAddr,
     router: Arc<Router>,
-    packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
+    packet_rx: Receiver<(Packet, SocketAddr)>,
     read_future: Option<BoxFuture<'static, Result<(Packet, SocketAddr)>>>,
     write_future: Option<BoxFuture<'static, Result<usize>>>,
 }
@@ -30,7 +30,7 @@ impl Connection {
         connection_id: u16,
         remote_addr: SocketAddr,
         router: Arc<Router>,
-        packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
+        packet_rx: Receiver<(Packet, SocketAddr)>,
         read_future: Option<BoxFuture<'static, Result<(Packet, SocketAddr)>>>,
         write_future: Option<BoxFuture<'static, Result<usize>>>,
     ) -> Self {
@@ -50,7 +50,7 @@ impl Connection {
         router: Arc<Router>,
         remote_addr: SocketAddr,
     ) -> Result<Self> {
-        let (packet_tx, packet_rx) = unbounded_channel();
+        let (packet_tx, packet_rx) = unbounded();
 
         Ok(Self::new(
             socket,
@@ -77,8 +77,8 @@ impl Stream for Connection {
         }
 
         // Now there are guaranteed to be no pending writes, so check for incoming packets.
-        let result = if let Poll::Ready(Some((packet, addr))) = self.packet_rx.poll_recv(cx) {
-            Ok((packet, addr))
+        let result = if let Ok(packet_and_addr) = self.packet_rx.try_recv() {
+            Ok(packet_and_addr)
         } else if self.read_future.is_some() {
             let packet_and_addr = ready!(self.read_future.as_mut().unwrap().as_mut().poll(cx));
             // Remove the future if it finished

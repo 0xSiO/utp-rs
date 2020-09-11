@@ -6,11 +6,9 @@ use std::{
 };
 
 use bytes::Bytes;
+use flume::{unbounded, Receiver};
 use futures_util::{future::BoxFuture, ready, stream::Stream};
-use tokio::{
-    net::ToSocketAddrs,
-    sync::mpsc::{unbounded_channel, UnboundedReceiver},
-};
+use tokio::net::ToSocketAddrs;
 
 use crate::{
     connection::Connection,
@@ -22,7 +20,7 @@ use crate::{
 
 pub struct UtpListener {
     socket: Arc<UtpSocket>,
-    syn_packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
+    syn_packet_rx: Receiver<(Packet, SocketAddr)>,
     router: Arc<Router>,
     read_future: Option<BoxFuture<'static, Result<(Packet, SocketAddr)>>>,
 }
@@ -30,7 +28,7 @@ pub struct UtpListener {
 impl UtpListener {
     pub fn new(
         socket: Arc<UtpSocket>,
-        syn_packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
+        syn_packet_rx: Receiver<(Packet, SocketAddr)>,
         router: Arc<Router>,
         read_future: Option<BoxFuture<'static, Result<(Packet, SocketAddr)>>>,
     ) -> Self {
@@ -44,7 +42,7 @@ impl UtpListener {
 
     /// Creates a new UtpListener, which will be bound to the specified address.
     pub async fn bind(addr: impl ToSocketAddrs) -> Result<Self> {
-        let (syn_packet_tx, syn_packet_rx) = unbounded_channel();
+        let (syn_packet_tx, syn_packet_rx) = unbounded();
         let router = Router::new(Default::default(), Some(syn_packet_tx));
         Ok(Self::new(
             Arc::new(UtpSocket::bind(addr).await?),
@@ -68,8 +66,8 @@ impl Stream for UtpListener {
         //   - if this gives us a result, extract the packet and address
         // - we are now guaranteed to have a packet and an address.
 
-        let result = if let Poll::Ready(Some((packet, addr))) = self.syn_packet_rx.poll_recv(cx) {
-            Ok((packet, addr))
+        let result = if let Ok(packet_and_addr) = self.syn_packet_rx.try_recv() {
+            Ok(packet_and_addr)
         } else if self.read_future.is_some() {
             let packet_and_addr = ready!(self.read_future.as_mut().unwrap().as_mut().poll(cx));
             // Remove the future if it finished
@@ -87,7 +85,7 @@ impl Stream for UtpListener {
         match result {
             Ok((packet, addr)) => match packet.packet_type {
                 PacketType::Syn => {
-                    let (connection_tx, connection_rx) = unbounded_channel();
+                    let (connection_tx, connection_rx) = unbounded();
                     if self.router.set_channel(packet.connection_id, connection_tx) {
                         // TODO: Craft valid state packet to respond to SYN
                         let state_packet = Packet::new(
