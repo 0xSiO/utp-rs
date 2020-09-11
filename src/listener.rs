@@ -76,7 +76,7 @@ impl Stream for UtpListener {
             self.read_future.take();
             packet_and_addr
         } else {
-            let socket = self.socket.clone();
+            let socket = Arc::clone(&self.socket);
             self.read_future = Some(Box::pin(async move { socket.recv_from().await }));
             let packet_and_addr = ready!(self.read_future.as_mut().unwrap().as_mut().poll(cx));
             // Remove the future if it finished
@@ -102,7 +102,7 @@ impl Stream for UtpListener {
                             vec![],
                             Bytes::new(),
                         );
-                        let socket = self.socket.clone();
+                        let socket = Arc::clone(&self.socket);
                         return Poll::Ready(Some(Ok(Connection::new(
                             Arc::clone(&self.socket),
                             packet.connection_id,
