@@ -6,7 +6,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use futures_util::{future::LocalBoxFuture, ready, stream::Stream};
+use futures_util::{future::BoxFuture, ready, stream::Stream};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
 use crate::{error::*, packet::Packet, router::Router, socket::UtpSocket};
@@ -21,8 +21,8 @@ pub struct Connection {
     router: Arc<Router>,
     packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
     // TODO: Double-check lifetimes of boxed futures
-    read_future: Option<LocalBoxFuture<'static, Result<(Packet, SocketAddr)>>>,
-    write_future: Option<LocalBoxFuture<'static, Result<usize>>>,
+    read_future: Option<BoxFuture<'static, Result<(Packet, SocketAddr)>>>,
+    write_future: Option<BoxFuture<'static, Result<usize>>>,
 }
 
 impl Connection {
@@ -50,8 +50,8 @@ impl Connection {
         remote_addr: SocketAddr,
         router: Arc<Router>,
         packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
-        read_future: Option<LocalBoxFuture<'static, Result<(Packet, SocketAddr)>>>,
-        write_future: Option<LocalBoxFuture<'static, Result<usize>>>,
+        read_future: Option<BoxFuture<'static, Result<(Packet, SocketAddr)>>>,
+        write_future: Option<BoxFuture<'static, Result<usize>>>,
     ) -> Self {
         Self {
             socket,
