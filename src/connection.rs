@@ -26,25 +26,22 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn generate(socket: UtpSocket, router: Arc<Router>, remote_addr: SocketAddr) -> Self {
+    pub fn generate(
+        socket: UtpSocket,
+        router: Arc<Router>,
+        remote_addr: SocketAddr,
+    ) -> Result<Self> {
         let (packet_tx, packet_rx) = unbounded_channel();
-        let mut connection_id = 0;
-        while router.has_channel(connection_id) {
-            // TODO: Checked addition?
-            connection_id += 1;
-        }
-        let success = router.set_channel(connection_id, packet_tx);
-        debug_assert!(success);
 
-        Self {
+        Ok(Self {
             socket,
-            connection_id,
+            connection_id: router.register_channel(packet_tx)?,
             remote_addr,
             router,
             packet_rx,
             read_future: None,
             write_future: None, // TODO: Write SYN packet to remote socket
-        }
+        })
     }
 
     pub fn new(
@@ -113,7 +110,7 @@ impl Stream for Connection {
                 println!("Connection {} got packet: {:?}", self.connection_id, packet);
                 todo!()
             }
-            Err(err) => return Poll::Ready(Some(Err(err))),
+            Err(err) => Poll::Ready(Some(Err(err))),
         }
     }
 }

@@ -8,6 +8,8 @@ pub enum Error {
     InvalidPacketType(u8),
     #[error(transparent)]
     PacketParseError(#[from] PacketParseError),
+    #[error("too many connections")]
+    TooManyConnections,
     #[error(transparent)]
     IOError(#[from] std::io::Error),
 }

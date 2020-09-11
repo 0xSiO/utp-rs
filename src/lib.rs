@@ -65,6 +65,7 @@ mod tests {
     use packet::{Packet, PacketType};
     use socket::UtpSocket;
 
+    // FIXME: This hangs intermittently
     #[tokio::test]
     async fn basic_connection_test() {
         let task = tokio::spawn(async {

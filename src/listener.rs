@@ -31,7 +31,7 @@ impl UtpListener {
     /// Creates a new UtpListener, which will be bound to the specified address.
     pub async fn bind(addr: impl ToSocketAddrs) -> Result<Self> {
         let (syn_packet_tx, syn_packet_rx) = unbounded_channel();
-        let router = Router::new(Default::default(), syn_packet_tx);
+        let router = Router::new(Default::default(), Some(syn_packet_tx));
         Ok(UtpListener {
             socket: UtpSocket::bind(addr).await?,
             syn_packet_rx,

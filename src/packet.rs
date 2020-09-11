@@ -69,7 +69,7 @@ impl From<ExtensionType> for u8 {
 }
 
 /// See http://bittorrent.org/beps/bep_0029.html#extension
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Extension {
     extension_type: ExtensionType,
     data: Bytes,
@@ -85,7 +85,7 @@ impl Extension {
 }
 
 /// See http://bittorrent.org/beps/bep_0029.html#header-format
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Packet {
     pub(crate) packet_type: PacketType,
     pub(crate) version: u8,
