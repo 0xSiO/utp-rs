@@ -1,18 +1,18 @@
 use std::net::SocketAddr;
 
-use dashmap::{DashMap, ElementGuard};
+use flurry::HashMap;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::packet::{Packet, PacketType};
 
 pub struct Router {
-    connection_states: DashMap<u16, UnboundedSender<(Packet, SocketAddr)>>,
+    connection_states: HashMap<u16, UnboundedSender<(Packet, SocketAddr)>>,
     syn_packet_tx: UnboundedSender<(Packet, SocketAddr)>,
 }
 
 impl Router {
     pub fn new(
-        connection_states: DashMap<u16, UnboundedSender<(Packet, SocketAddr)>>,
+        connection_states: HashMap<u16, UnboundedSender<(Packet, SocketAddr)>>,
         syn_packet_tx: UnboundedSender<(Packet, SocketAddr)>,
     ) -> Self {
         Self {
@@ -22,33 +22,17 @@ impl Router {
     }
 
     pub fn has_channel(&self, id: u16) -> bool {
-        self.connection_states.contains_key(&id)
-    }
-
-    pub fn get_channel(
-        &self,
-        id: u16,
-    ) -> Option<ElementGuard<u16, UnboundedSender<(Packet, SocketAddr)>>> {
-        self.connection_states.get(&id)
+        self.connection_states.pin().contains_key(&id)
     }
 
     pub fn set_channel(&self, id: u16, state: UnboundedSender<(Packet, SocketAddr)>) -> bool {
-        if self.connection_states.contains_key(&id) {
-            false
-        } else {
-            // TODO: This could cause a bug where state is mysteriously overridden
-            //       If this is a problem, consider using Arc<Mutex<HashMap>>
-            let result = self.connection_states.replace(id, state);
-            // Make absolutely sure the state didn't already exist
-            debug_assert!(result.is_none());
-            true
-        }
+        self.connection_states.pin().try_insert(id, state).is_ok()
     }
 
     pub fn route(&self, packet: Packet, addr: SocketAddr) {
-        match self.get_channel(packet.connection_id) {
-            Some(element) => {
-                match element.value().send((packet, addr)) {
+        match self.connection_states.pin().get(&packet.connection_id) {
+            Some(sender) => {
+                match sender.send((packet, addr)) {
                     Ok(()) => {}
                     Err(_) => {} // TODO: The receiver is gone, so this state is stale?
                 }
