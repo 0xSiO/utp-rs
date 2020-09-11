@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    sync::{Arc, RwLock},
-};
+use std::{collections::HashMap, net::SocketAddr, sync::RwLock};
 
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -12,13 +8,13 @@ use crate::{
 };
 
 pub struct Router {
-    connection_states: Arc<RwLock<HashMap<u16, UnboundedSender<(Packet, SocketAddr)>>>>,
+    connection_states: RwLock<HashMap<u16, UnboundedSender<(Packet, SocketAddr)>>>,
     syn_packet_tx: Option<UnboundedSender<(Packet, SocketAddr)>>,
 }
 
 impl Router {
     pub fn new(
-        connection_states: Arc<RwLock<HashMap<u16, UnboundedSender<(Packet, SocketAddr)>>>>,
+        connection_states: RwLock<HashMap<u16, UnboundedSender<(Packet, SocketAddr)>>>,
         syn_packet_tx: Option<UnboundedSender<(Packet, SocketAddr)>>,
     ) -> Self {
         Self {

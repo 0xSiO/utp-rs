@@ -15,7 +15,7 @@ use crate::{error::*, packet::Packet, router::Router, socket::UtpSocket};
 // of unacked packets, pass a reference into the write future, and access the queue from
 // the future... something like that
 pub struct Connection {
-    socket: UtpSocket,
+    socket: Arc<UtpSocket>,
     connection_id: u16,
     remote_addr: SocketAddr,
     router: Arc<Router>,
@@ -27,7 +27,7 @@ pub struct Connection {
 
 impl Connection {
     pub fn generate(
-        socket: UtpSocket,
+        socket: Arc<UtpSocket>,
         router: Arc<Router>,
         remote_addr: SocketAddr,
     ) -> Result<Self> {
@@ -45,7 +45,7 @@ impl Connection {
     }
 
     pub fn new(
-        socket: UtpSocket,
+        socket: Arc<UtpSocket>,
         connection_id: u16,
         remote_addr: SocketAddr,
         router: Arc<Router>,

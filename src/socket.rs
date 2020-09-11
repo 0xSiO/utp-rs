@@ -1,4 +1,4 @@
-use std::{convert::TryFrom, net::SocketAddr, sync::Arc};
+use std::{convert::TryFrom, net::SocketAddr};
 
 use bytes::{Bytes, BytesMut};
 use tokio::{
@@ -11,9 +11,8 @@ use crate::{error::*, packet::Packet};
 // Ethernet MTU minus IP/UDP header sizes. TODO: Use path MTU discovery
 const MAX_DATAGRAM_SIZE: usize = 1472;
 
-#[derive(Clone)]
 pub struct UtpSocket {
-    socket: Arc<Mutex<UdpSocket>>,
+    socket: Mutex<UdpSocket>,
     // Maximum number of bytes the socket may have in-flight at any given time
     // max_window: u32,
     // Number of bytes currently in-flight
@@ -25,7 +24,7 @@ pub struct UtpSocket {
 impl UtpSocket {
     pub async fn bind(local_addr: impl ToSocketAddrs) -> Result<Self> {
         Ok(Self {
-            socket: Arc::new(Mutex::new(UdpSocket::bind(local_addr).await?)),
+            socket: Mutex::new(UdpSocket::bind(local_addr).await?),
         })
     }
 

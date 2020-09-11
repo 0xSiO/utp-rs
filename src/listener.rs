@@ -21,7 +21,7 @@ use crate::{
 };
 
 pub struct UtpListener {
-    socket: UtpSocket,
+    socket: Arc<UtpSocket>,
     syn_packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
     router: Arc<Router>,
     read_future: Option<BoxFuture<'static, Result<(Packet, SocketAddr)>>>,
@@ -31,9 +31,10 @@ impl UtpListener {
     /// Creates a new UtpListener, which will be bound to the specified address.
     pub async fn bind(addr: impl ToSocketAddrs) -> Result<Self> {
         let (syn_packet_tx, syn_packet_rx) = unbounded_channel();
+        // TODO: Should we give the option of providing a Router?
         let router = Router::new(Default::default(), Some(syn_packet_tx));
         Ok(UtpListener {
-            socket: UtpSocket::bind(addr).await?,
+            socket: Arc::new(UtpSocket::bind(addr).await?),
             syn_packet_rx,
             router: Arc::new(router),
             read_future: None,
@@ -90,7 +91,7 @@ impl Stream for UtpListener {
                         );
                         let socket = self.socket.clone();
                         return Poll::Ready(Some(Ok(Connection::new(
-                            self.socket.clone(),
+                            Arc::clone(&self.socket),
                             packet.connection_id,
                             addr,
                             Arc::clone(&self.router),
