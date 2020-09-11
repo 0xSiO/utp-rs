@@ -9,10 +9,7 @@ use bytes::Bytes;
 use futures_util::{future::BoxFuture, ready, stream::Stream};
 use tokio::{
     net::ToSocketAddrs,
-    sync::{
-        mpsc::{unbounded_channel, UnboundedReceiver},
-        Mutex,
-    },
+    sync::mpsc::{unbounded_channel, UnboundedReceiver},
 };
 
 use crate::{
@@ -24,7 +21,7 @@ use crate::{
 };
 
 pub struct UtpListener {
-    socket: Arc<Mutex<UtpSocket>>,
+    socket: UtpSocket,
     syn_packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
     router: Arc<Router>,
     read_future: Option<BoxFuture<'static, Result<(Packet, SocketAddr)>>>,
@@ -36,7 +33,7 @@ impl UtpListener {
         let (syn_packet_tx, syn_packet_rx) = unbounded_channel();
         let router = Router::new(Default::default(), syn_packet_tx);
         Ok(UtpListener {
-            socket: Arc::new(Mutex::new(UtpSocket::bind(addr).await?)),
+            socket: UtpSocket::bind(addr).await?,
             syn_packet_rx,
             router: Arc::new(router),
             read_future: None,
@@ -65,11 +62,8 @@ impl Stream for UtpListener {
             self.read_future.take();
             packet_and_addr
         } else {
-            let socket = Arc::clone(&self.socket);
-            self.read_future = Some(Box::pin(async move {
-                let mut socket = socket.lock().await;
-                socket.recv_from().await
-            }));
+            let socket = self.socket.clone();
+            self.read_future = Some(Box::pin(async move { socket.recv_from().await }));
             let packet_and_addr = ready!(self.read_future.as_mut().unwrap().as_mut().poll(cx));
             // Remove the future if it finished
             self.read_future.take();
@@ -94,18 +88,17 @@ impl Stream for UtpListener {
                             vec![],
                             Bytes::new(),
                         );
-                        let socket = Arc::clone(&self.socket);
+                        let socket = self.socket.clone();
                         return Poll::Ready(Some(Ok(Connection::new(
-                            Arc::clone(&self.socket),
+                            self.socket.clone(),
                             packet.connection_id,
                             addr,
                             Arc::clone(&self.router),
                             connection_rx,
                             None,
-                            Some(Box::pin(async move {
-                                let mut socket = socket.lock().await;
-                                socket.send_to(state_packet, addr).await
-                            })),
+                            Some(Box::pin(
+                                async move { socket.send_to(state_packet, addr).await },
+                            )),
                         ))));
                     } else {
                         // If we already have state for the connection ID, skip the packet

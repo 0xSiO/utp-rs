@@ -1,15 +1,19 @@
-use std::{convert::TryFrom, net::SocketAddr};
+use std::{convert::TryFrom, net::SocketAddr, sync::Arc};
 
 use bytes::{Bytes, BytesMut};
-use tokio::net::{ToSocketAddrs, UdpSocket};
+use tokio::{
+    net::{ToSocketAddrs, UdpSocket},
+    sync::Mutex,
+};
 
 use crate::{error::*, packet::Packet};
 
 // Ethernet MTU minus IP/UDP header sizes. TODO: Use path MTU discovery
 const MAX_DATAGRAM_SIZE: usize = 1472;
 
+#[derive(Clone)]
 pub struct UtpSocket {
-    socket: UdpSocket,
+    socket: Arc<Mutex<UdpSocket>>,
     // Maximum number of bytes the socket may have in-flight at any given time
     // max_window: u32,
     // Number of bytes currently in-flight
@@ -21,18 +25,23 @@ pub struct UtpSocket {
 impl UtpSocket {
     pub async fn bind(local_addr: impl ToSocketAddrs) -> Result<Self> {
         Ok(Self {
-            socket: UdpSocket::bind(local_addr).await?,
+            socket: Arc::new(Mutex::new(UdpSocket::bind(local_addr).await?)),
         })
     }
 
-    pub async fn send_to(&mut self, packet: Packet, target: impl ToSocketAddrs) -> Result<usize> {
-        Ok(self.socket.send_to(&Bytes::from(packet), target).await?)
+    pub async fn send_to(&self, packet: Packet, target: impl ToSocketAddrs) -> Result<usize> {
+        Ok(self
+            .socket
+            .lock()
+            .await
+            .send_to(&Bytes::from(packet), target)
+            .await?)
     }
 
-    pub async fn recv_from(&mut self) -> Result<(Packet, SocketAddr)> {
+    pub async fn recv_from(&self) -> Result<(Packet, SocketAddr)> {
         let mut buf = BytesMut::with_capacity(MAX_DATAGRAM_SIZE);
         buf.resize(MAX_DATAGRAM_SIZE, 0);
-        let (bytes_read, addr) = self.socket.recv_from(&mut buf).await?;
+        let (bytes_read, addr) = self.socket.lock().await.recv_from(&mut buf).await?;
         buf.truncate(bytes_read);
         Ok((Packet::try_from(buf.freeze())?, addr))
     }

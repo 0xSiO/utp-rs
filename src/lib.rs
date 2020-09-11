@@ -74,8 +74,8 @@ mod tests {
         });
         #[rustfmt::skip]
         let syn = Packet::new(PacketType::Syn, 1, 10, 20, 0, 30, 1, 0, vec![], Bytes::new());
-        let mut client = UtpSocket::bind("localhost:5001").await.unwrap();
-        client.send_to(syn, "localhost:5000").await.unwrap();
+        let socket = UtpSocket::bind("localhost:5001").await.unwrap();
+        socket.send_to(syn, "localhost:5000").await.unwrap();
         task.await.unwrap();
     }
 }

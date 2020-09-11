@@ -7,10 +7,7 @@ use std::{
 };
 
 use futures_util::{future::LocalBoxFuture, ready, stream::Stream};
-use tokio::sync::{
-    mpsc::{unbounded_channel, UnboundedReceiver},
-    Mutex,
-};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
 use crate::{error::*, packet::Packet, router::Router, socket::UtpSocket};
 
@@ -18,7 +15,7 @@ use crate::{error::*, packet::Packet, router::Router, socket::UtpSocket};
 // of unacked packets, pass a reference into the write future, and access the queue from
 // the future... something like that
 pub struct Connection {
-    socket: Arc<Mutex<UtpSocket>>,
+    socket: UtpSocket,
     connection_id: u16,
     remote_addr: SocketAddr,
     router: Arc<Router>,
@@ -29,11 +26,7 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn generate(
-        socket: Arc<Mutex<UtpSocket>>,
-        router: Arc<Router>,
-        remote_addr: SocketAddr,
-    ) -> Self {
+    pub fn generate(socket: UtpSocket, router: Arc<Router>, remote_addr: SocketAddr) -> Self {
         let (packet_tx, packet_rx) = unbounded_channel();
         let mut connection_id = 0;
         while router.has_channel(connection_id) {
@@ -55,7 +48,7 @@ impl Connection {
     }
 
     pub fn new(
-        socket: Arc<Mutex<UtpSocket>>,
+        socket: UtpSocket,
         connection_id: u16,
         remote_addr: SocketAddr,
         router: Arc<Router>,
@@ -96,11 +89,8 @@ impl Stream for Connection {
             self.read_future.take();
             packet_and_addr
         } else {
-            let socket = Arc::clone(&self.socket);
-            self.read_future = Some(Box::pin(async move {
-                let mut socket = socket.lock().await;
-                socket.recv_from().await
-            }));
+            let socket = self.socket.clone();
+            self.read_future = Some(Box::pin(async move { socket.recv_from().await }));
             let packet_and_addr = ready!(self.read_future.as_mut().unwrap().as_mut().poll(cx));
             // Remove the future if it finished
             self.read_future.take();
