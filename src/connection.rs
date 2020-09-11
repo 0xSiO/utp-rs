@@ -26,24 +26,6 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn generate(
-        socket: Arc<UtpSocket>,
-        router: Arc<Router>,
-        remote_addr: SocketAddr,
-    ) -> Result<Self> {
-        let (packet_tx, packet_rx) = unbounded_channel();
-
-        Ok(Self {
-            socket,
-            connection_id: router.register_channel(packet_tx)?,
-            remote_addr,
-            router,
-            packet_rx,
-            read_future: None,
-            write_future: None, // TODO: Write SYN packet to remote socket
-        })
-    }
-
     pub fn new(
         socket: Arc<UtpSocket>,
         connection_id: u16,
@@ -62,6 +44,24 @@ impl Connection {
             read_future,
             write_future,
         }
+    }
+
+    pub fn generate(
+        socket: Arc<UtpSocket>,
+        router: Arc<Router>,
+        remote_addr: SocketAddr,
+    ) -> Result<Self> {
+        let (packet_tx, packet_rx) = unbounded_channel();
+
+        Ok(Self::new(
+            socket,
+            router.register_channel(packet_tx)?,
+            remote_addr,
+            router,
+            packet_rx,
+            None,
+            None, // TODO: Write SYN packet to remote socket
+        ))
     }
 }
 

@@ -22,10 +22,12 @@ pub struct UtpSocket {
 }
 
 impl UtpSocket {
+    pub fn new(socket: Mutex<UdpSocket>) -> Self {
+        Self { socket }
+    }
+
     pub async fn bind(local_addr: impl ToSocketAddrs) -> Result<Self> {
-        Ok(Self {
-            socket: Mutex::new(UdpSocket::bind(local_addr).await?),
-        })
+        Ok(Self::new(Mutex::new(UdpSocket::bind(local_addr).await?)))
     }
 
     pub async fn send_to(&self, packet: Packet, target: impl ToSocketAddrs) -> Result<usize> {

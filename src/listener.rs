@@ -28,17 +28,30 @@ pub struct UtpListener {
 }
 
 impl UtpListener {
+    pub fn new(
+        socket: Arc<UtpSocket>,
+        syn_packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
+        router: Arc<Router>,
+        read_future: Option<BoxFuture<'static, Result<(Packet, SocketAddr)>>>,
+    ) -> Self {
+        Self {
+            socket,
+            syn_packet_rx,
+            router,
+            read_future,
+        }
+    }
+
     /// Creates a new UtpListener, which will be bound to the specified address.
     pub async fn bind(addr: impl ToSocketAddrs) -> Result<Self> {
         let (syn_packet_tx, syn_packet_rx) = unbounded_channel();
-        // TODO: Should we give the option of providing a Router?
         let router = Router::new(Default::default(), Some(syn_packet_tx));
-        Ok(UtpListener {
-            socket: Arc::new(UtpSocket::bind(addr).await?),
+        Ok(Self::new(
+            Arc::new(UtpSocket::bind(addr).await?),
             syn_packet_rx,
-            router: Arc::new(router),
-            read_future: None,
-        })
+            Arc::new(router),
+            None,
+        ))
     }
 }
 
