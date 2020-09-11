@@ -20,7 +20,6 @@ pub struct Connection {
     remote_addr: SocketAddr,
     router: Arc<Router>,
     packet_rx: UnboundedReceiver<(Packet, SocketAddr)>,
-    // TODO: Double-check lifetimes of boxed futures
     read_future: Option<BoxFuture<'static, Result<(Packet, SocketAddr)>>>,
     write_future: Option<BoxFuture<'static, Result<usize>>>,
 }
