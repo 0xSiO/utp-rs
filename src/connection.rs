@@ -22,6 +22,7 @@ pub struct Connection {
     packet_rx: Receiver<(Packet, SocketAddr)>,
     read_future: Option<BoxFuture<'static, Result<(Packet, SocketAddr)>>>,
     write_future: Option<BoxFuture<'static, Result<usize>>>,
+    route_future: Option<BoxFuture<'static, ()>>,
 }
 
 impl Connection {
@@ -33,6 +34,7 @@ impl Connection {
         packet_rx: Receiver<(Packet, SocketAddr)>,
         read_future: Option<BoxFuture<'static, Result<(Packet, SocketAddr)>>>,
         write_future: Option<BoxFuture<'static, Result<usize>>>,
+        route_future: Option<BoxFuture<'static, ()>>,
     ) -> Self {
         Self {
             socket,
@@ -42,10 +44,11 @@ impl Connection {
             packet_rx,
             read_future,
             write_future,
+            route_future,
         }
     }
 
-    pub fn generate(
+    pub async fn generate(
         socket: Arc<UtpSocket>,
         router: Arc<Router>,
         remote_addr: SocketAddr,
@@ -54,13 +57,35 @@ impl Connection {
 
         Ok(Self::new(
             socket,
-            router.register_channel(packet_tx)?,
+            router.register_channel(packet_tx).await?,
             remote_addr,
             router,
             packet_rx,
             None,
             None, // TODO: Write SYN packet to remote socket
+            None,
         ))
+    }
+
+    fn poll_read(&mut self, cx: &mut Context) -> Poll<Result<(Packet, SocketAddr)>> {
+        let packet_and_addr = ready!(self.read_future.as_mut().unwrap().as_mut().poll(cx));
+        // Remove the future if it finished
+        self.read_future.take();
+        Poll::Ready(packet_and_addr)
+    }
+
+    fn poll_write(&mut self, cx: &mut Context) -> Poll<Result<usize>> {
+        let bytes_written = ready!(self.write_future.as_mut().unwrap().as_mut().poll(cx));
+        // Remove the future if it finished
+        self.write_future.take();
+        Poll::Ready(bytes_written)
+    }
+
+    fn poll_route(&mut self, cx: &mut Context) -> Poll<()> {
+        ready!(self.route_future.as_mut().unwrap().as_mut().poll(cx));
+        // Remove the future if it finished
+        self.route_future.take();
+        Poll::Ready(())
     }
 }
 
@@ -68,36 +93,51 @@ impl Stream for Connection {
     type Item = Result<()>; // TODO: Add some "message" type
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        // Do not progress until any writes to the socket have finished.
-        if self.write_future.is_some() {
-            // TODO: Handle this result in case it failed
-            let _ = ready!(self.write_future.as_mut().unwrap().as_mut().poll(cx));
-            // Remove the future if it finished
-            self.write_future.take();
+        // Finish routing packets to their intended connections. We do not want to yield
+        // if we're still holding onto unrouted packets, since if someone decides to
+        // stop streaming us, the packet won't ever get routed!
+        if self.route_future.is_some() {
+            // No pending reads or writes.
+            assert!(self.read_future.is_none());
+            assert!(self.write_future.is_none());
+
+            ready!(self.poll_route(cx))
         }
 
-        // Now there are guaranteed to be no pending writes, so check for incoming packets.
-        let result = if let Ok(packet_and_addr) = self.packet_rx.try_recv() {
-            Ok(packet_and_addr)
-        } else if self.read_future.is_some() {
-            let packet_and_addr = ready!(self.read_future.as_mut().unwrap().as_mut().poll(cx));
-            // Remove the future if it finished
-            self.read_future.take();
-            packet_and_addr
+        if self.write_future.is_some() {
+            // No pending reads, since we're holding the lock on the socket
+            assert!(self.read_future.is_none());
+            // No pending routes, since we should have finished that already
+            assert!(self.route_future.is_none());
+
+            // TODO: Handle this result in case it failed
+            let _result = ready!(self.poll_write(cx));
+        }
+
+        // If we're in the middle of reading from the socket, finish doing that so other
+        // connections can use the socket. Else, try reading incoming packets from our
+        // channel.
+        let packet_and_addr_opt = if self.read_future.is_some() {
+            Some(ready!(self.poll_read(cx)))
+        } else if let Ok(packet_and_addr) = self.packet_rx.try_recv() {
+            Some(Ok(packet_and_addr))
         } else {
-            let socket = Arc::clone(&self.socket);
-            self.read_future = Some(Box::pin(async move { socket.recv_from().await }));
-            let packet_and_addr = ready!(self.read_future.as_mut().unwrap().as_mut().poll(cx));
-            // Remove the future if it finished
-            self.read_future.take();
-            packet_and_addr
+            None
         };
 
-        match result {
-            Ok((packet, addr)) => {
+        // No pending futures.
+        assert!(self.route_future.is_none());
+        assert!(self.write_future.is_none());
+        assert!(self.read_future.is_none());
+
+        match packet_and_addr_opt {
+            Some(Ok((packet, addr))) => {
                 if packet.connection_id != self.connection_id {
                     // This packet isn't meant for us
-                    self.router.route(packet, addr);
+                    let router = Arc::clone(&self.router);
+                    self.route_future =
+                        Some(Box::pin(async move { router.route(packet, addr).await }));
+                    ready!(self.poll_route(cx));
                     return Poll::Pending;
                 }
 
@@ -109,7 +149,14 @@ impl Stream for Connection {
                 println!("Connection {} got packet: {:?}", self.connection_id, packet);
                 todo!()
             }
-            Err(err) => Poll::Ready(Some(Err(err))),
+            Some(Err(err)) => return Poll::Ready(Some(Err(err))),
+            None => {
+                // We ended up with no packet, so as a last resort we start to read a
+                // packet from the socket.
+                let socket = Arc::clone(&self.socket);
+                self.read_future = Some(Box::pin(async move { socket.recv_from().await }));
+                return Poll::Pending;
+            }
         }
     }
 }
