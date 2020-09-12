@@ -183,6 +183,8 @@ impl Stream for UtpListener {
                 // packet from the socket.
                 let socket = Arc::clone(&self.socket);
                 self.read_future = Some(Box::pin(async move { socket.recv_from().await }));
+                // TODO: Since we immediately yield here without polling the socket,
+                // are we adding unnecessary delay?
                 return Poll::Pending;
             }
         }
