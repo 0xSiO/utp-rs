@@ -14,7 +14,7 @@ mod socket;
 //   - if it's a SYN packet, check to see if we already have a matching connection
 //     - if we're already connected, ignore this packet
 //     - else, begin the handshake process to set up a new connection. Channels to
-//       connections are stored in a DashMap, identified by the 16-bit connection ID in
+//       connections are stored in a HashMap, identified by the 16-bit connection ID in
 //       the packet header.
 //   - if not SYN, route the packet to an existing connection, or send a RESET if there is
 //     no existing connection.
@@ -32,15 +32,16 @@ mod socket;
 //
 // Messages contain data from one or more packets.
 //
-// A Router holds a DashMap of connection IDs to channels, through which we can send
-// packets to any connection.
+// A Router holds a synchronized HashMap of connection IDs to channels, through which we
+// can send packets to any connection.
 //
 // Each connection shares access to the underlying UtpSocket. When a connection wants to
 // read a packet, it either checks its receiving channel or stores a future to read the
 // socket, and polls it. If a packet is received, we check the connection ID field. If it
 // doesn't match the current connection's ID, then we route the packet through the packet
 // router, which sends the packet to the corresponding connection. When a connection is
-// dropped, it removes its channel entry from the router.
+// dropped, the router cannot send messages to it anymore and its entry in the HashMap is
+// removed.
 //
 // To produce connections from a UtpListener: if the next packet is a SYN, initiate the
 // handshake process by adding an entry to the packet router's DashMap, then return a new
