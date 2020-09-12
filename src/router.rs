@@ -1,6 +1,7 @@
-use std::{collections::HashMap, net::SocketAddr, sync::RwLock};
+use std::{collections::HashMap, net::SocketAddr};
 
 use flume::Sender;
+use tokio::sync::RwLock;
 
 use crate::{
     error::*,
@@ -29,8 +30,8 @@ impl Router {
         }
     }
 
-    pub fn register_channel(&self, state: Sender<(Packet, SocketAddr)>) -> Result<u16> {
-        let mut states = self.connection_states.write().unwrap();
+    pub async fn register_channel(&self, state: Sender<(Packet, SocketAddr)>) -> Result<u16> {
+        let mut states = self.connection_states.write().await;
         let mut connection_id = 0;
         while states.contains_key(&connection_id) {
             connection_id = connection_id
@@ -41,8 +42,8 @@ impl Router {
         Ok(connection_id)
     }
 
-    pub fn set_channel(&self, id: u16, state: Sender<(Packet, SocketAddr)>) -> bool {
-        let mut states = self.connection_states.write().unwrap();
+    pub async fn set_channel(&self, id: u16, state: Sender<(Packet, SocketAddr)>) -> bool {
+        let mut states = self.connection_states.write().await;
         if states.contains_key(&id) {
             false
         } else {
@@ -51,11 +52,11 @@ impl Router {
         }
     }
 
-    pub fn route(&self, packet: Packet, addr: SocketAddr) {
+    pub async fn route(&self, packet: Packet, addr: SocketAddr) {
         match self
             .connection_states
             .read()
-            .unwrap()
+            .await
             .get(&packet.connection_id)
         {
             Some(sender) => {
