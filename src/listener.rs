@@ -116,7 +116,7 @@ impl Stream for UtpListener {
         // If we're in the middle of reading from the socket, finish doing that so other
         // connections can use the socket. Else, try reading incoming SYN packets from
         // our channel.
-        let packet_and_addr_opt = if self.read_future.is_some() {
+        let mut packet_and_addr_opt = if self.read_future.is_some() {
             Some(ready!(self.poll_read(cx)))
         } else if let Ok(packet_and_addr) = self.syn_packet_rx.try_recv() {
             Some(Ok(packet_and_addr))
@@ -129,63 +129,72 @@ impl Stream for UtpListener {
         assert!(self.accept_future.is_none());
         assert!(self.read_future.is_none());
 
-        match packet_and_addr_opt {
-            Some(Ok((packet, addr))) => match packet.packet_type {
-                PacketType::Syn => {
-                    let router = Arc::clone(&self.router);
-                    let socket = Arc::clone(&self.socket);
-                    self.accept_future = Some(Box::pin(async move {
-                        let (connection_tx, connection_rx) = unbounded();
-                        if router
-                            .set_channel(packet.connection_id, connection_tx)
-                            .await
-                        {
-                            // TODO: Craft valid state packet to respond to SYN
-                            #[rustfmt::skip]
+        // A loop is used here in case we end up with this situation:
+        //   No packet was received up until this point, so a read to the socket begins.
+        //   If the first poll to the pending read gives us a packet, immediately
+        //   process the packet by jumping to the beginning of the loop.
+        //
+        // Other branches of the match will return without continuing the loop, so this
+        // shouldn't block.
+        loop {
+            match packet_and_addr_opt {
+                Some(Ok((packet, addr))) => match packet.packet_type {
+                    PacketType::Syn => {
+                        let router = Arc::clone(&self.router);
+                        let socket = Arc::clone(&self.socket);
+                        self.accept_future = Some(Box::pin(async move {
+                            let (connection_tx, connection_rx) = unbounded();
+                            if router
+                                .set_channel(packet.connection_id, connection_tx)
+                                .await
+                            {
+                                // TODO: Craft valid state packet to respond to SYN
+                                #[rustfmt::skip]
                             let state_packet = Packet::new(
                                 PacketType::State, 1, packet.connection_id,
                                 0, 0, 0, 0, 0, vec![], Bytes::new(),
                             );
-                            Some(Connection::new(
-                                Arc::clone(&socket),
-                                packet.connection_id,
-                                addr,
-                                Arc::clone(&router),
-                                connection_rx,
-                                None,
-                                Some(Box::pin(
-                                    async move { socket.send_to(state_packet, addr).await },
-                                )),
-                                None,
-                            ))
-                        } else {
-                            None
-                        }
-                    }));
+                                Some(Connection::new(
+                                    Arc::clone(&socket),
+                                    packet.connection_id,
+                                    addr,
+                                    Arc::clone(&router),
+                                    connection_rx,
+                                    None,
+                                    Some(Box::pin(async move {
+                                        socket.send_to(state_packet, addr).await
+                                    })),
+                                    None,
+                                ))
+                            } else {
+                                None
+                            }
+                        }));
 
-                    match ready!(self.poll_accept(cx)) {
-                        Some(conn) => return Poll::Ready(Some(Ok(conn))),
-                        None => return Poll::Pending,
+                        match ready!(self.poll_accept(cx)) {
+                            Some(conn) => return Poll::Ready(Some(Ok(conn))),
+                            None => return Poll::Pending,
+                        }
                     }
+                    _ => {
+                        // This packet isn't meant for us
+                        let router = Arc::clone(&self.router);
+                        self.route_future =
+                            Some(Box::pin(async move { router.route(packet, addr).await }));
+                        ready!(self.poll_route(cx));
+                        return Poll::Pending;
+                    }
+                },
+                Some(Err(err)) => return Poll::Ready(Some(Err(err))),
+                None => {
+                    // We ended up with no packet, so as a last resort we start to read a
+                    // packet from the socket.
+                    let socket = Arc::clone(&self.socket);
+                    self.read_future = Some(Box::pin(async move { socket.recv_from().await }));
+                    packet_and_addr_opt.replace(ready!(self.poll_read(cx)));
+                    // Got a packet! Jump to beginning of the loop to process it
+                    continue;
                 }
-                _ => {
-                    // This packet isn't meant for us
-                    let router = Arc::clone(&self.router);
-                    self.route_future =
-                        Some(Box::pin(async move { router.route(packet, addr).await }));
-                    ready!(self.poll_route(cx));
-                    return Poll::Pending;
-                }
-            },
-            Some(Err(err)) => return Poll::Ready(Some(Err(err))),
-            None => {
-                // We ended up with no packet, so as a last resort we start to read a
-                // packet from the socket.
-                let socket = Arc::clone(&self.socket);
-                self.read_future = Some(Box::pin(async move { socket.recv_from().await }));
-                // TODO: Since we immediately yield here without polling the socket,
-                // are we adding unnecessary delay?
-                return Poll::Pending;
             }
         }
     }

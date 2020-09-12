@@ -117,7 +117,7 @@ impl Stream for Connection {
         // If we're in the middle of reading from the socket, finish doing that so other
         // connections can use the socket. Else, try reading incoming packets from our
         // channel.
-        let packet_and_addr_opt = if self.read_future.is_some() {
+        let mut packet_and_addr_opt = if self.read_future.is_some() {
             Some(ready!(self.poll_read(cx)))
         } else if let Ok(packet_and_addr) = self.packet_rx.try_recv() {
             Some(Ok(packet_and_addr))
@@ -130,32 +130,43 @@ impl Stream for Connection {
         assert!(self.write_future.is_none());
         assert!(self.read_future.is_none());
 
-        match packet_and_addr_opt {
-            Some(Ok((packet, addr))) => {
-                if packet.connection_id != self.connection_id {
-                    // This packet isn't meant for us
-                    let router = Arc::clone(&self.router);
-                    self.route_future =
-                        Some(Box::pin(async move { router.route(packet, addr).await }));
-                    ready!(self.poll_route(cx));
-                    return Poll::Pending;
-                }
+        // A loop is used here in case we end up with this situation:
+        //   No packet was received up until this point, so a read to the socket begins.
+        //   If the first poll to the pending read gives us a packet, immediately
+        //   process the packet by jumping to the beginning of the loop.
+        //
+        // Other branches of the match will return without continuing the loop, so this
+        // shouldn't block.
+        loop {
+            match packet_and_addr_opt {
+                Some(Ok((packet, addr))) => {
+                    if packet.connection_id != self.connection_id {
+                        // This packet isn't meant for us
+                        let router = Arc::clone(&self.router);
+                        self.route_future =
+                            Some(Box::pin(async move { router.route(packet, addr).await }));
+                        ready!(self.poll_route(cx));
+                        return Poll::Pending;
+                    }
 
-                if self.remote_addr != addr {
-                    // Somehow we got this packet from an unfamiliar address
-                    // TODO: Log this event and drop the packet?
-                }
+                    if self.remote_addr != addr {
+                        // Somehow we got this packet from an unfamiliar address
+                        // TODO: Log this event and drop the packet?
+                    }
 
-                println!("Connection {} got packet: {:?}", self.connection_id, packet);
-                todo!()
-            }
-            Some(Err(err)) => return Poll::Ready(Some(Err(err))),
-            None => {
-                // We ended up with no packet, so as a last resort we start to read a
-                // packet from the socket.
-                let socket = Arc::clone(&self.socket);
-                self.read_future = Some(Box::pin(async move { socket.recv_from().await }));
-                return Poll::Pending;
+                    println!("Connection {} got packet: {:?}", self.connection_id, packet);
+                    todo!()
+                }
+                Some(Err(err)) => return Poll::Ready(Some(Err(err))),
+                None => {
+                    // We ended up with no packet, so as a last resort we start to read a
+                    // packet from the socket.
+                    let socket = Arc::clone(&self.socket);
+                    self.read_future = Some(Box::pin(async move { socket.recv_from().await }));
+                    packet_and_addr_opt.replace(ready!(self.poll_read(cx)));
+                    // Got a packet! Jump to beginning of the loop to process it
+                    continue;
+                }
             }
         }
     }

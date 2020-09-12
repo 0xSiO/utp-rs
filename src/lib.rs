@@ -74,7 +74,7 @@ mod tests {
             let result =
                 tokio::time::timeout(Duration::from_millis(500), listener.try_next()).await;
             match result {
-                Ok(Ok(_conn)) => println!("got conn"), // TODO: Check that conn is valid
+                Ok(Ok(_conn)) => {} // TODO: Check that conn is valid
                 Ok(Err(err)) => panic!("encountered error: {}", err),
                 Err(_) => {} // read timed out, probably due to packet loss
             }
@@ -82,9 +82,7 @@ mod tests {
         #[rustfmt::skip]
         let syn = Packet::new(PacketType::Syn, 1, 10, 20, 0, 30, 1, 0, vec![], Bytes::new());
         let socket = UtpSocket::bind("localhost:5001").await.unwrap();
-        println!("sending packet");
         socket.send_to(syn, "localhost:5000").await.unwrap();
-        println!("packet sent");
         task.await.unwrap();
     }
 }
