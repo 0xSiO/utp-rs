@@ -174,7 +174,7 @@ impl Stream for Connection {
 impl fmt::Debug for Connection {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_fmt(format_args!(
-            "Connection {{ connection_id: {}, remote_addr: {} }}",
+            "Connection {{ id: {}, addr: {} }}",
             self.connection_id, self.remote_addr
         ))
     }

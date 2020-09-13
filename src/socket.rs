@@ -11,6 +11,7 @@ use crate::{error::*, packet::Packet};
 // Ethernet MTU minus IP/UDP header sizes. TODO: Use path MTU discovery
 const MAX_DATAGRAM_SIZE: usize = 1472;
 
+#[derive(Debug)]
 pub struct UtpSocket {
     socket: Mutex<UdpSocket>,
     // Maximum number of bytes the socket may have in-flight at any given time

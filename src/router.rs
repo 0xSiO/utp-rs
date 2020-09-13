@@ -8,6 +8,7 @@ use crate::{
     packet::{Packet, PacketType},
 };
 
+#[derive(Debug)]
 pub struct Router {
     connection_states: RwLock<HashMap<u16, Sender<(Packet, SocketAddr)>>>,
     syn_packet_tx: Option<Sender<(Packet, SocketAddr)>>,
