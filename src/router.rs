@@ -13,12 +13,6 @@ pub struct Router {
     syn_packet_tx: Option<Sender<(Packet, SocketAddr)>>,
 }
 
-// TODO: Methods called here will usually block, since we acquire a lock. The problem is
-//       these methods are used inside poll_next implementations, which should not block.
-//       Probably need to rewrite to use try_read/try_write. Any streams will need to
-//       store the arguments they want to send while the lock is held elsewhere. This
-//       could be an opportunity to consider making separate Stream types to hold this
-//       state rather than implementing Stream for the main library types.
 impl Router {
     pub fn new(
         connection_states: RwLock<HashMap<u16, Sender<(Packet, SocketAddr)>>>,
