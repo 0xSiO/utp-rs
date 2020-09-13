@@ -4,12 +4,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("invalid packet type: {0}")]
-    InvalidPacketType(u8),
+    #[error("too many connections. limit: {}", u16::MAX)]
+    TooManyConnections,
     #[error(transparent)]
     PacketParseError(#[from] PacketParseError),
-    #[error("too many connections")]
-    TooManyConnections,
     #[error(transparent)]
     IOError(#[from] std::io::Error),
 }
@@ -20,6 +18,8 @@ pub enum PacketParseError {
     TooSmall,
     #[error("unsupported packet version: {0}")]
     UnsupportedVersion(u8),
+    #[error("invalid packet type: {0}")]
+    InvalidPacketType(u8),
     #[error("expected extension {0}, but hit end of buffer")]
     MissingExtension(usize),
     #[error(

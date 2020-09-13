@@ -28,7 +28,7 @@ impl TryFrom<u8> for PacketType {
             2 => Ok(PacketType::State),
             3 => Ok(PacketType::Reset),
             4 => Ok(PacketType::Syn),
-            n => Err(Error::InvalidPacketType(n)),
+            n => Err(PacketParseError::InvalidPacketType(n).into()),
         }
     }
 }
