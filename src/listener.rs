@@ -24,7 +24,7 @@ pub struct UtpListener {
     router: Arc<Router>,
     read_future: Option<BoxFuture<'static, Result<(Packet, SocketAddr)>>>,
     route_future: Option<BoxFuture<'static, ()>>,
-    accept_future: Option<BoxFuture<'static, Option<Connection>>>,
+    accept_future: Option<BoxFuture<'static, Result<Connection>>>,
 }
 
 impl UtpListener {
@@ -34,7 +34,7 @@ impl UtpListener {
         router: Arc<Router>,
         read_future: Option<BoxFuture<'static, Result<(Packet, SocketAddr)>>>,
         route_future: Option<BoxFuture<'static, ()>>,
-        accept_future: Option<BoxFuture<'static, Option<Connection>>>,
+        accept_future: Option<BoxFuture<'static, Result<Connection>>>,
     ) -> Self {
         Self {
             socket,
@@ -74,9 +74,7 @@ impl UtpListener {
         Poll::Ready(())
     }
 
-    // TODO: Should return type be a Result? We'd need to define an error like
-    // 'ConnectionExists' when adding a channel to the router fails
-    fn poll_accept(&mut self, cx: &mut Context) -> Poll<Option<Connection>> {
+    fn poll_accept(&mut self, cx: &mut Context) -> Poll<Result<Connection>> {
         let connection = ready!(self.accept_future.as_mut().unwrap().as_mut().poll(cx));
         // Remove the future if it finished
         self.accept_future.take();
@@ -108,8 +106,10 @@ impl Stream for UtpListener {
             // Similarly, we don't want to be left holding a lock on the router.
             assert!(self.route_future.is_none());
 
-            if let Some(conn) = ready!(self.poll_accept(cx)) {
-                return Poll::Ready(Some(Ok(conn)));
+            match ready!(self.poll_accept(cx)) {
+                Ok(conn) => return Poll::Ready(Some(Ok(conn))),
+                // TODO: Do we just do nothing when accept fails?
+                Err(_) => todo!(),
             }
         }
 
@@ -144,36 +144,33 @@ impl Stream for UtpListener {
                         let socket = Arc::clone(&self.socket);
                         self.accept_future = Some(Box::pin(async move {
                             let (connection_tx, connection_rx) = unbounded();
-                            if router
+                            router
                                 .set_channel(packet.connection_id, connection_tx)
-                                .await
-                            {
-                                // TODO: Craft valid state packet to respond to SYN
-                                #[rustfmt::skip]
+                                .await?;
+                            // TODO: Craft valid state packet to respond to SYN
+                            #[rustfmt::skip]
                             let state_packet = Packet::new(
                                 PacketType::State, 1, packet.connection_id,
                                 0, 0, 0, 0, 0, vec![], Bytes::new(),
                             );
-                                Some(Connection::new(
-                                    Arc::clone(&socket),
-                                    packet.connection_id,
-                                    addr,
-                                    Arc::clone(&router),
-                                    connection_rx,
-                                    None,
-                                    Some(Box::pin(async move {
-                                        socket.send_to(state_packet, addr).await
-                                    })),
-                                    None,
-                                ))
-                            } else {
-                                None
-                            }
+                            Ok(Connection::new(
+                                Arc::clone(&socket),
+                                packet.connection_id,
+                                addr,
+                                Arc::clone(&router),
+                                connection_rx,
+                                None,
+                                Some(Box::pin(
+                                    async move { socket.send_to(state_packet, addr).await },
+                                )),
+                                None,
+                            ))
                         }));
 
                         match ready!(self.poll_accept(cx)) {
-                            Some(conn) => return Poll::Ready(Some(Ok(conn))),
-                            None => return Poll::Pending,
+                            Ok(conn) => return Poll::Ready(Some(Ok(conn))),
+                            // TODO: Do we just do nothing when accept fails?
+                            Err(_) => todo!(),
                         }
                     }
                     _ => {

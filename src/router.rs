@@ -36,13 +36,13 @@ impl Router {
         Ok(connection_id)
     }
 
-    pub async fn set_channel(&self, id: u16, state: Sender<(Packet, SocketAddr)>) -> bool {
+    pub async fn set_channel(&self, id: u16, state: Sender<(Packet, SocketAddr)>) -> Result<()> {
         let mut states = self.connection_states.write().await;
         if states.contains_key(&id) {
-            false
+            Err(Error::ConnectionExists(id))
         } else {
             debug_assert!(states.insert(id, state).is_none());
-            true
+            Ok(())
         }
     }
 

@@ -6,6 +6,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     #[error("too many connections. limit: {}", u16::MAX)]
     TooManyConnections,
+    #[error("connection with id {0} already exists")]
+    ConnectionExists(u16),
     #[error(transparent)]
     PacketParseError(#[from] PacketParseError),
     #[error(transparent)]
