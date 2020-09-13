@@ -105,9 +105,8 @@ impl Stream for Connection {
         }
 
         if self.write_future.is_some() {
-            // No pending reads, since we're holding the lock on the socket
+            // No pending reads or routes.
             assert!(self.read_future.is_none());
-            // No pending routes, since we should have finished that already
             assert!(self.route_future.is_none());
 
             // TODO: Handle this result in case it failed
