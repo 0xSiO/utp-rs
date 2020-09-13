@@ -108,8 +108,8 @@ impl Stream for UtpListener {
 
             match ready!(self.poll_accept(cx)) {
                 Ok(conn) => return Poll::Ready(Some(Ok(conn))),
-                // TODO: Do we just do nothing when accept fails?
-                Err(_) => todo!(),
+                // Ignore failing connection requests
+                Err(_) => {}
             }
         }
 
@@ -169,8 +169,11 @@ impl Stream for UtpListener {
 
                         match ready!(self.poll_accept(cx)) {
                             Ok(conn) => return Poll::Ready(Some(Ok(conn))),
-                            // TODO: Do we just do nothing when accept fails?
-                            Err(_) => todo!(),
+                            // Ignore, but now there's nothing left to do, so yield to
+                            // the runtime. We could try to jump to the beginning of the
+                            // loop and start a read from the socket, but this caused
+                            // tricky lifetime issues when I tried to do it.
+                            Err(_) => return Poll::Pending,
                         }
                     }
                     _ => {
