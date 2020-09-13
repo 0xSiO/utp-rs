@@ -11,6 +11,9 @@ flume = { version = "0.9.0", default-features = false }
 futures-util = "0.3.5"
 thiserror = "1.0.20"
 tokio = { version = "0.2.22", features = ["dns", "io-util", "macros", "sync", "udp"] }
+tracing = { version = "0.1.19", features = ["log"] }
+tracing-futures = "0.2.4"
 
 [dev-dependencies]
 tokio = { version = "0.2.22", features = ["dns", "io-util", "macros", "sync", "time", "udp"] }
+tracing-subscriber = "0.2.12"
