@@ -8,7 +8,10 @@ use tokio::{
     sync::{Mutex, RwLock},
 };
 
-use crate::{error::*, packet::Packet};
+use crate::{
+    error::*,
+    packet::{Packet, PacketType},
+};
 
 // Ethernet MTU minus IP/UDP header sizes. TODO: Use path MTU discovery
 const MAX_DATAGRAM_SIZE: usize = 1472;
@@ -58,31 +61,6 @@ impl UtpSocket {
         ))
     }
 
-    pub async fn get_packet(&self, connection_id: u16, remote_addr: SocketAddr) -> Result<Packet> {
-        loop {
-            if let Some(queue) = self.connection_states.read().await.get(&connection_id) {
-                while let Ok((packet, addr)) = queue.pop() {
-                    if addr == remote_addr {
-                        return Ok(packet);
-                    }
-                    // Drop packet from unknown source
-                }
-            }
-
-            let (packet, addr) = self.recv_from().await?;
-            if packet.connection_id == connection_id && addr == remote_addr {
-                return Ok(packet);
-            } else {
-                self.connection_states
-                    .write()
-                    .await
-                    .entry(packet.connection_id)
-                    .or_default()
-                    .push((packet, addr));
-            }
-        }
-    }
-
     pub async fn send_to(&self, packet: Packet, remote_addr: impl ToSocketAddrs) -> Result<usize> {
         let remote_addr = lookup_host(remote_addr)
             .await?
@@ -111,5 +89,68 @@ impl UtpSocket {
             self.local_addr, remote_addr, packet.packet_type, bytes_read
         );
         Ok((packet, remote_addr))
+    }
+
+    async fn route_packet(&self, packet: Packet, addr: SocketAddr) {
+        match self
+            .connection_states
+            .write()
+            .await
+            .get(&packet.connection_id)
+        {
+            Some(queue) => queue.push((packet, addr)),
+            None => debug!(
+                "no connections found for packet from {}: {:?}",
+                addr, packet
+            ),
+        }
+    }
+
+    pub async fn get_syn(&self) -> Result<(Packet, SocketAddr)> {
+        loop {
+            if let Ok(packet_and_addr) = self.syn_packets.pop() {
+                return Ok(packet_and_addr);
+            }
+
+            let (packet, addr) = self.recv_from().await?;
+            if let PacketType::Syn = packet.packet_type {
+                return Ok((packet, addr));
+            } else {
+                self.route_packet(packet, addr).await;
+            }
+        }
+    }
+
+    pub async fn get_packet(&self, connection_id: u16, remote_addr: SocketAddr) -> Result<Packet> {
+        loop {
+            if let Some(queue) = self.connection_states.read().await.get(&connection_id) {
+                while let Ok((packet, addr)) = queue.pop() {
+                    if addr == remote_addr {
+                        return Ok(packet);
+                    }
+                    debug!(
+                        "expected packet from {}, got one from {}",
+                        remote_addr, addr
+                    );
+                }
+            }
+
+            let (packet, addr) = self.recv_from().await?;
+            if let PacketType::Syn = packet.packet_type {
+                self.syn_packets.push((packet, addr));
+            } else {
+                if packet.connection_id == connection_id {
+                    if addr == remote_addr {
+                        return Ok(packet);
+                    }
+                    debug!(
+                        "expected packet from {}, got one from {}",
+                        remote_addr, addr
+                    );
+                } else {
+                    self.route_packet(packet, addr).await;
+                }
+            }
+        }
     }
 }
