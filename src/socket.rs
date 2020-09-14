@@ -2,12 +2,12 @@ use std::{convert::TryFrom, net::SocketAddr};
 
 use bytes::{Bytes, BytesMut};
 use tokio::{
-    net::{lookup_host, ToSocketAddrs, UdpSocket},
+    net::{ToSocketAddrs, UdpSocket},
     sync::Mutex,
 };
 use tracing::{debug, instrument, trace};
 
-use crate::{error::*, packet::Packet};
+use crate::{error::*, packet::Packet, util::resolve};
 
 // Ethernet MTU minus IP/UDP header sizes. TODO: Use path MTU discovery
 const MAX_DATAGRAM_SIZE: usize = 1472;
@@ -29,9 +29,9 @@ impl UtpSocket {
         Self { socket, local_addr }
     }
 
-    #[instrument(err, skip(local_addr))]
+    #[instrument(name = "bind_socket", err, skip(local_addr))]
     pub async fn bind(local_addr: impl ToSocketAddrs) -> Result<Self> {
-        let local_addr = lookup_host(local_addr).await?.next().unwrap();
+        let local_addr = resolve(local_addr).await?;
         trace!("binding to {}", local_addr);
         Ok(Self::new(
             Mutex::new(UdpSocket::bind(local_addr).await?),
@@ -41,7 +41,7 @@ impl UtpSocket {
 
     #[instrument(err, skip(self, remote_addr), fields(local_addr = %self.local_addr))]
     pub async fn send_to(&self, packet: Packet, remote_addr: impl ToSocketAddrs) -> Result<usize> {
-        let remote_addr = lookup_host(remote_addr).await?.next().unwrap();
+        let remote_addr = resolve(remote_addr).await?;
         debug!("locking socket to send to {}", remote_addr);
         Ok(self
             .socket

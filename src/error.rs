@@ -4,6 +4,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("can't find socket address")]
+    MissingAddress,
     #[error("too many connections. limit: {}", u16::MAX)]
     TooManyConnections,
     #[error("connection with id {0} already exists")]
