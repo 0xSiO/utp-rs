@@ -70,6 +70,8 @@ mod tests {
 
     #[tokio::test]
     async fn basic_connection_test() {
+        tracing_subscriber::fmt::init();
+
         let task = tokio::spawn(async {
             let mut listener = UtpListener::bind("localhost:5000").await.unwrap();
             let result =
