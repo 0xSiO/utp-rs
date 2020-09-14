@@ -4,7 +4,6 @@ pub mod listener;
 mod packet;
 mod router;
 mod socket;
-mod util;
 
 // General idea of how we respond to packets:
 //
@@ -59,26 +58,37 @@ mod util;
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration};
 
     use bytes::Bytes;
     use futures_util::stream::TryStreamExt;
 
     use super::*;
+    use connection::Connection;
     use listener::UtpListener;
     use packet::{Packet, PacketType};
+    use router::Router;
     use socket::UtpSocket;
 
     fn init_logger() {
-        pretty_env_logger::init_timed();
+        let _ = pretty_env_logger::try_init();
+    }
+
+    async fn get_socket() -> UtpSocket {
+        UtpSocket::bind("localhost:0").await.unwrap()
+    }
+
+    async fn get_listener() -> UtpListener {
+        UtpListener::bind("localhost:0").await.unwrap()
     }
 
     #[tokio::test]
     async fn basic_connection_test() {
         init_logger();
 
-        let task = tokio::spawn(async {
-            let mut listener = UtpListener::bind("localhost:5000").await.unwrap();
+        let mut listener = get_listener().await;
+        let listener_addr = listener.local_addr();
+        let task = tokio::spawn(async move {
             let result =
                 tokio::time::timeout(Duration::from_millis(500), listener.try_next()).await;
             match result {
@@ -89,8 +99,40 @@ mod tests {
         });
         #[rustfmt::skip]
         let syn = Packet::new(PacketType::Syn, 1, 10, 20, 0, 30, 1, 0, vec![], Bytes::new());
-        let socket = UtpSocket::bind("localhost:5001").await.unwrap();
-        socket.send_to(syn, "localhost:5000").await.unwrap();
+        let socket = get_socket().await;
+        socket.send_to(syn, listener_addr).await.unwrap();
         task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn routing_test() {
+        init_logger();
+
+        let socket_1 = Arc::new(get_socket().await);
+        let socket_2 = Arc::new(get_socket().await);
+        let addr_1 = socket_1.local_addr();
+        let addr_2 = socket_2.local_addr();
+        let router = Arc::new(Router::new(Default::default(), None));
+        let mut conn_1 = Connection::generate(Arc::clone(&socket_1), Arc::clone(&router), addr_2)
+            .await
+            .unwrap();
+        let mut conn_2 = Connection::generate(Arc::clone(&socket_2), Arc::clone(&router), addr_1)
+            .await
+            .unwrap();
+
+        #[rustfmt::skip]
+        let syn_1 = Packet::new(PacketType::Syn, 1, conn_1.connection_id(),
+                                20, 0, 30, 1, 0, vec![], Bytes::new());
+        #[rustfmt::skip]
+        let syn_2 = Packet::new(PacketType::Syn, 1, conn_2.connection_id(),
+                                20, 0, 30, 1, 0, vec![], Bytes::new());
+
+        socket_1.send_to(syn_1, addr_2).await.unwrap();
+        socket_1.send_to(syn_2, addr_2).await.unwrap();
+
+        // Second packet should come through
+        assert_eq!(conn_2.try_next().await.unwrap(), Some(()));
+        // First packet should be routed back to us
+        assert_eq!(conn_1.try_next().await.unwrap(), Some(()));
     }
 }

@@ -8,6 +8,7 @@ use std::{
 use bytes::Bytes;
 use flume::{unbounded, Receiver};
 use futures_util::{future::BoxFuture, ready, stream::Stream};
+use log::debug;
 use tokio::net::ToSocketAddrs;
 
 use crate::{
@@ -16,7 +17,6 @@ use crate::{
     packet::{Packet, PacketType},
     router::Router,
     socket::UtpSocket,
-    util::resolve,
 };
 
 pub struct UtpListener {
@@ -47,13 +47,16 @@ impl UtpListener {
         }
     }
 
+    pub fn local_addr(&self) -> SocketAddr {
+        self.socket.local_addr()
+    }
+
     /// Creates a new UtpListener, which will be bound to the specified address.
     pub async fn bind(addr: impl ToSocketAddrs) -> Result<Self> {
         let (syn_packet_tx, syn_packet_rx) = unbounded();
         let router = Router::new(Default::default(), Some(syn_packet_tx));
-        let local_addr = resolve(addr).await?;
         Ok(Self::new(
-            Arc::new(UtpSocket::bind(local_addr).await?),
+            Arc::new(UtpSocket::bind(addr).await?),
             syn_packet_rx,
             Arc::new(router),
             None,
@@ -180,6 +183,7 @@ impl Stream for UtpListener {
                     }
                     _ => {
                         // This packet isn't meant for us
+                        debug!("{} routing unknown packet", self.socket.local_addr());
                         let router = Arc::clone(&self.router);
                         self.route_future =
                             Some(Box::pin(async move { router.route(packet, addr).await }));

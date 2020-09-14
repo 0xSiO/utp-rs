@@ -3,11 +3,11 @@ use std::{convert::TryFrom, net::SocketAddr};
 use bytes::{Bytes, BytesMut};
 use log::{debug, trace};
 use tokio::{
-    net::{ToSocketAddrs, UdpSocket},
+    net::{lookup_host, ToSocketAddrs, UdpSocket},
     sync::Mutex,
 };
 
-use crate::{error::*, packet::Packet, util::resolve};
+use crate::{error::*, packet::Packet};
 
 // Ethernet MTU minus IP/UDP header sizes. TODO: Use path MTU discovery
 const MAX_DATAGRAM_SIZE: usize = 1472;
@@ -29,20 +29,25 @@ impl UtpSocket {
         Self { socket, local_addr }
     }
 
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+
     pub async fn bind(local_addr: impl ToSocketAddrs) -> Result<Self> {
-        let local_addr = resolve(local_addr).await?;
+        let udp_socket = UdpSocket::bind(local_addr).await?;
+        let local_addr = udp_socket.local_addr()?;
         trace!("binding to {}", local_addr);
-        Ok(Self::new(
-            Mutex::new(UdpSocket::bind(local_addr).await?),
-            local_addr,
-        ))
+        Ok(Self::new(Mutex::new(udp_socket), local_addr))
     }
 
     pub async fn send_to(&self, packet: Packet, remote_addr: impl ToSocketAddrs) -> Result<usize> {
-        let remote_addr = resolve(remote_addr).await?;
+        let remote_addr = lookup_host(remote_addr)
+            .await?
+            .next()
+            .ok_or_else(|| Error::MissingAddress)?;
         debug!(
-            "{} sending {:?} to {}",
-            self.local_addr, packet.packet_type, remote_addr
+            "{} -> {} {:?}",
+            self.local_addr, remote_addr, packet.packet_type
         );
         Ok(self
             .socket
@@ -59,8 +64,8 @@ impl UtpSocket {
         buf.truncate(bytes_read);
         let packet = Packet::try_from(buf.freeze())?;
         debug!(
-            "{} got {:?} from {}, {} bytes",
-            self.local_addr, packet.packet_type, remote_addr, bytes_read
+            "{} <- {} {:?} ({} bytes)",
+            self.local_addr, remote_addr, packet.packet_type, bytes_read
         );
         Ok((packet, remote_addr))
     }

@@ -8,6 +8,7 @@ use std::{
 
 use flume::{unbounded, Receiver};
 use futures_util::{future::BoxFuture, ready, stream::Stream};
+use log::debug;
 
 use crate::{error::*, packet::Packet, router::Router, socket::UtpSocket};
 
@@ -46,6 +47,10 @@ impl Connection {
             write_future,
             route_future,
         }
+    }
+
+    pub fn connection_id(&self) -> u16 {
+        self.connection_id
     }
 
     pub async fn generate(
@@ -141,6 +146,7 @@ impl Stream for Connection {
                 Some(Ok((packet, addr))) => {
                     if packet.connection_id != self.connection_id {
                         // This packet isn't meant for us
+                        debug!("{} routing unknown packet", self.socket.local_addr());
                         let router = Arc::clone(&self.router);
                         self.route_future =
                             Some(Box::pin(async move { router.route(packet, addr).await }));
@@ -153,8 +159,8 @@ impl Stream for Connection {
                         // TODO: Log this event and drop the packet?
                     }
 
-                    println!("Connection {} got packet: {:?}", self.connection_id, packet);
-                    todo!()
+                    // TODO: Process the packet
+                    return Poll::Ready(Some(Ok(())));
                 }
                 Some(Err(err)) => return Poll::Ready(Some(Err(err))),
                 None => {
