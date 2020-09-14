@@ -1,4 +1,8 @@
-use std::{collections::HashMap, convert::TryFrom, net::SocketAddr};
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    convert::TryFrom,
+    net::SocketAddr,
+};
 
 use bytes::{Bytes, BytesMut};
 use crossbeam_queue::SegQueue;
@@ -117,6 +121,16 @@ impl UtpSocket {
                 return Ok((packet, addr));
             } else {
                 self.route_packet(packet, addr).await;
+            }
+        }
+    }
+
+    pub async fn init_connection(&self, id: u16) -> Result<()> {
+        match self.connection_states.write().await.entry(id) {
+            Entry::Occupied(_) => Err(Error::ConnectionExists(id)),
+            vacant => {
+                vacant.or_default();
+                Ok(())
             }
         }
     }
