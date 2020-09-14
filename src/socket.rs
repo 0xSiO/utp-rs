@@ -98,7 +98,7 @@ impl UtpSocket {
     async fn route_packet(&self, packet: Packet, addr: SocketAddr) {
         match self
             .connection_states
-            .write()
+            .read()
             .await
             .get(&packet.connection_id)
         {
