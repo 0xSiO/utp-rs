@@ -8,12 +8,11 @@ publish = false
 [dependencies]
 bytes = "0.5.6"
 crossbeam-queue = "0.2.3"
-flume = { version = "0.9.0", default-features = false }
 futures-util = "0.3.5"
 log = "0.4.11"
 thiserror = "1.0.20"
-tokio = { version = "0.2.22", features = ["dns", "io-util", "macros", "sync", "udp"] }
+tokio = { version = "0.2.22", features = ["dns", "macros", "sync", "udp"] }
 
 [dev-dependencies]
 pretty_env_logger = "0.4.0"
-tokio = { version = "0.2.22", features = ["rt-threaded", "dns", "io-util", "macros", "sync", "time", "udp"] }
+tokio = { version = "0.2.22", features = ["rt-threaded", "time"] }
