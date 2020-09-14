@@ -2,7 +2,6 @@ mod connection;
 pub mod error;
 pub mod listener;
 mod packet;
-mod router;
 mod socket;
 
 // General idea of how we respond to packets:
@@ -61,6 +60,8 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     use bytes::Bytes;
+    use futures_util::future::join_all;
+    use log::error;
 
     use super::*;
     use connection::Connection;
@@ -107,30 +108,47 @@ mod tests {
 
         let local_socket = Arc::new(get_socket().await);
         let remote_socket = Arc::new(get_socket().await);
-        let conn_1 = Connection::generate(Arc::clone(&local_socket), remote_socket.local_addr())
-            .await
-            .unwrap();
-        let conn_2 = Connection::generate(Arc::clone(&local_socket), remote_socket.local_addr())
-            .await
-            .unwrap();
+
+        // TODO: More than 278 hangs the test... figure out why
+        const MAX_CONNS: u16 = 278;
+
+        let local_conns: Vec<Connection> = join_all((0..MAX_CONNS).into_iter().map(|_: u16| {
+            Connection::generate(Arc::clone(&local_socket), remote_socket.local_addr())
+        }))
+        .await
+        .into_iter()
+        .map(|result| result.unwrap())
+        .collect();
 
         #[rustfmt::skip]
-        let packet_1 = Packet::new(PacketType::State, 1, conn_1.connection_id(),
-                                   20, 0, 30, 1, 0, vec![], Bytes::new());
-        #[rustfmt::skip]
-        let packet_2 = Packet::new(PacketType::State, 1, conn_2.connection_id(),
-                                   20, 0, 30, 1, 0, vec![], Bytes::new());
+        let packets: Vec<Packet> = (0..MAX_CONNS).into_iter().map(|i| {
+            Packet::new(PacketType::State, 1, local_conns[i as usize].connection_id(),
+                        20, 0, 30, 1, 0, vec![], Bytes::new())
+        }).collect();
 
-        remote_socket
-            .send_to(packet_1, local_socket.local_addr())
+        let send_task = tokio::spawn(async move {
+            join_all((0..MAX_CONNS).into_iter().map(|i: u16| {
+                remote_socket.send_to(packets[i as usize].clone(), local_socket.local_addr())
+            }))
             .await
-            .unwrap();
-        remote_socket
-            .send_to(packet_2, local_socket.local_addr())
-            .await
-            .unwrap();
+            .into_iter()
+            .for_each(|result| assert!(result.unwrap() > 0));
+        });
 
-        assert_eq!(conn_1.recv().await.unwrap(), ());
-        assert_eq!(conn_2.recv().await.unwrap(), ());
+        let recv_task = tokio::spawn(async move {
+            join_all(
+                local_conns
+                    .iter()
+                    .map(|conn| tokio::time::timeout(Duration::from_millis(500), conn.recv())),
+            )
+            .await
+            .into_iter()
+            .for_each(|result| match result {
+                Ok(result) => assert_eq!(result.unwrap(), ()),
+                Err(err) => error!("{}", err),
+            });
+        });
+
+        let _ = tokio::join!(send_task, recv_task);
     }
 }
