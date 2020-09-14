@@ -135,6 +135,18 @@ impl UtpSocket {
         }
     }
 
+    pub async fn register_connection(&self) -> Result<u16> {
+        let mut states = self.connection_states.write().await;
+        let mut connection_id = 0;
+        while states.contains_key(&connection_id) {
+            connection_id = connection_id
+                .checked_add(1)
+                .ok_or_else(|| Error::TooManyConnections)?;
+        }
+        debug_assert!(states.insert(connection_id, Default::default()).is_none());
+        Ok(connection_id)
+    }
+
     pub async fn get_packet(&self, connection_id: u16, remote_addr: SocketAddr) -> Result<Packet> {
         loop {
             if let Some(queue) = self.connection_states.read().await.get(&connection_id) {

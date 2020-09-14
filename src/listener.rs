@@ -1,7 +1,6 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use bytes::Bytes;
-use log::debug;
 use tokio::net::ToSocketAddrs;
 
 use crate::{
@@ -40,7 +39,7 @@ impl UtpListener {
             {
                 // TODO: Craft valid state packet to respond to SYN
                 #[rustfmt::skip]
-                let state_packet = Packet::new(
+                let _state_packet = Packet::new(
                     PacketType::State, 1, packet.connection_id,
                     0, 0, 0, 0, 0, vec![], Bytes::new(),
                 );
@@ -48,13 +47,6 @@ impl UtpListener {
                     Arc::clone(&self.socket),
                     packet.connection_id,
                     addr,
-                    Arc::clone(&router),
-                    connection_rx,
-                    None,
-                    Some(Box::pin(
-                        async move { socket.send_to(state_packet, addr).await },
-                    )),
-                    None,
                 ));
             }
         }

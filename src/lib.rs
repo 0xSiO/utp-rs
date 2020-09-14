@@ -61,13 +61,11 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     use bytes::Bytes;
-    use futures_util::stream::TryStreamExt;
 
     use super::*;
     use connection::Connection;
     use listener::UtpListener;
     use packet::{Packet, PacketType};
-    use router::Router;
     use socket::UtpSocket;
 
     fn init_logger() {
@@ -86,11 +84,10 @@ mod tests {
     async fn basic_connection_test() {
         init_logger();
 
-        let mut listener = get_listener().await;
+        let listener = get_listener().await;
         let listener_addr = listener.local_addr();
         let task = tokio::spawn(async move {
-            let result =
-                tokio::time::timeout(Duration::from_millis(500), listener.try_next()).await;
+            let result = tokio::time::timeout(Duration::from_millis(500), listener.accept()).await;
             match result {
                 Ok(Ok(_conn)) => {} // TODO: Check that conn is valid
                 Ok(Err(err)) => panic!("encountered error: {}", err),
@@ -108,31 +105,32 @@ mod tests {
     async fn routing_test() {
         init_logger();
 
-        let socket_1 = Arc::new(get_socket().await);
-        let socket_2 = Arc::new(get_socket().await);
-        let addr_1 = socket_1.local_addr();
-        let addr_2 = socket_2.local_addr();
-        let router = Arc::new(Router::new(Default::default(), None));
-        let mut conn_1 = Connection::generate(Arc::clone(&socket_1), Arc::clone(&router), addr_2)
+        let local_socket = Arc::new(get_socket().await);
+        let remote_socket = Arc::new(get_socket().await);
+        let conn_1 = Connection::generate(Arc::clone(&local_socket), remote_socket.local_addr())
             .await
             .unwrap();
-        let mut conn_2 = Connection::generate(Arc::clone(&socket_2), Arc::clone(&router), addr_1)
+        let conn_2 = Connection::generate(Arc::clone(&local_socket), remote_socket.local_addr())
             .await
             .unwrap();
 
         #[rustfmt::skip]
-        let syn_1 = Packet::new(PacketType::Syn, 1, conn_1.connection_id(),
-                                20, 0, 30, 1, 0, vec![], Bytes::new());
+        let packet_1 = Packet::new(PacketType::State, 1, conn_1.connection_id(),
+                                   20, 0, 30, 1, 0, vec![], Bytes::new());
         #[rustfmt::skip]
-        let syn_2 = Packet::new(PacketType::Syn, 1, conn_2.connection_id(),
-                                20, 0, 30, 1, 0, vec![], Bytes::new());
+        let packet_2 = Packet::new(PacketType::State, 1, conn_2.connection_id(),
+                                   20, 0, 30, 1, 0, vec![], Bytes::new());
 
-        socket_1.send_to(syn_1, addr_2).await.unwrap();
-        socket_1.send_to(syn_2, addr_2).await.unwrap();
+        remote_socket
+            .send_to(packet_1, local_socket.local_addr())
+            .await
+            .unwrap();
+        remote_socket
+            .send_to(packet_2, local_socket.local_addr())
+            .await
+            .unwrap();
 
-        // Second packet should come through
-        assert_eq!(conn_2.try_next().await.unwrap(), Some(()));
-        // First packet should be routed back to us
-        assert_eq!(conn_1.try_next().await.unwrap(), Some(()));
+        assert_eq!(conn_1.recv().await.unwrap(), ());
+        assert_eq!(conn_2.recv().await.unwrap(), ());
     }
 }
