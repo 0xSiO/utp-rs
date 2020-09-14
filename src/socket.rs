@@ -1,11 +1,11 @@
 use std::{convert::TryFrom, net::SocketAddr};
 
 use bytes::{Bytes, BytesMut};
+use log::{debug, trace};
 use tokio::{
     net::{ToSocketAddrs, UdpSocket},
     sync::Mutex,
 };
-use tracing::{debug, instrument, trace};
 
 use crate::{error::*, packet::Packet, util::resolve};
 
@@ -29,7 +29,6 @@ impl UtpSocket {
         Self { socket, local_addr }
     }
 
-    #[instrument(name = "bind_socket", err, skip(local_addr))]
     pub async fn bind(local_addr: impl ToSocketAddrs) -> Result<Self> {
         let local_addr = resolve(local_addr).await?;
         trace!("binding to {}", local_addr);
@@ -39,10 +38,12 @@ impl UtpSocket {
         ))
     }
 
-    #[instrument(err, skip(self, remote_addr), fields(local_addr = %self.local_addr))]
     pub async fn send_to(&self, packet: Packet, remote_addr: impl ToSocketAddrs) -> Result<usize> {
         let remote_addr = resolve(remote_addr).await?;
-        debug!("locking socket to send to {}", remote_addr);
+        debug!(
+            "{} sending {:?} to {}",
+            self.local_addr, packet.packet_type, remote_addr
+        );
         Ok(self
             .socket
             .lock()
@@ -51,14 +52,16 @@ impl UtpSocket {
             .await?)
     }
 
-    #[instrument(err, skip(self), fields(local_addr = %self.local_addr))]
     pub async fn recv_from(&self) -> Result<(Packet, SocketAddr)> {
         let mut buf = BytesMut::with_capacity(MAX_DATAGRAM_SIZE);
         buf.resize(MAX_DATAGRAM_SIZE, 0);
-        debug!("locking socket to recv");
         let (bytes_read, remote_addr) = self.socket.lock().await.recv_from(&mut buf).await?;
         buf.truncate(bytes_read);
-        debug!("read {} bytes from {}", bytes_read, remote_addr);
-        Ok((Packet::try_from(buf.freeze())?, remote_addr))
+        let packet = Packet::try_from(buf.freeze())?;
+        debug!(
+            "{} got {:?} from {}, {} bytes",
+            self.local_addr, packet.packet_type, remote_addr, bytes_read
+        );
+        Ok((packet, remote_addr))
     }
 }

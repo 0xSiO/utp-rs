@@ -69,9 +69,13 @@ mod tests {
     use packet::{Packet, PacketType};
     use socket::UtpSocket;
 
+    fn init_logger() {
+        pretty_env_logger::init_timed();
+    }
+
     #[tokio::test]
     async fn basic_connection_test() {
-        tracing_subscriber::fmt::init();
+        init_logger();
 
         let task = tokio::spawn(async {
             let mut listener = UtpListener::bind("localhost:5000").await.unwrap();

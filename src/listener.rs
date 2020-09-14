@@ -9,7 +9,6 @@ use bytes::Bytes;
 use flume::{unbounded, Receiver};
 use futures_util::{future::BoxFuture, ready, stream::Stream};
 use tokio::net::ToSocketAddrs;
-use tracing::{debug, instrument};
 
 use crate::{
     connection::Connection,
@@ -49,12 +48,10 @@ impl UtpListener {
     }
 
     /// Creates a new UtpListener, which will be bound to the specified address.
-    #[instrument(name = "bind_listener", err, skip(addr))]
     pub async fn bind(addr: impl ToSocketAddrs) -> Result<Self> {
         let (syn_packet_tx, syn_packet_rx) = unbounded();
         let router = Router::new(Default::default(), Some(syn_packet_tx));
         let local_addr = resolve(addr).await?;
-        debug!("binding to {}", local_addr);
         Ok(Self::new(
             Arc::new(UtpSocket::bind(local_addr).await?),
             syn_packet_rx,
