@@ -23,6 +23,8 @@ const MAX_DATAGRAM_SIZE: usize = 1472;
 #[derive(Debug)]
 pub struct UtpSocket {
     socket: Mutex<UdpSocket>,
+    // TODO: Do we need an async RwLock? I don't think we ever hold a lock across await
+    //       points, and this isn't an IO resource...
     connection_states: RwLock<HashMap<u16, SegQueue<(Packet, SocketAddr)>>>,
     syn_packets: SegQueue<(Packet, SocketAddr)>,
     local_addr: SocketAddr,
