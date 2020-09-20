@@ -64,15 +64,18 @@ mod tests {
         task.await.unwrap();
     }
 
-    #[tokio::test]
+    #[tokio::test(core_threads = 2)]
     async fn routing_test() {
         init_logger();
 
         let local_socket = Arc::new(get_socket().await);
         let remote_socket = Arc::new(get_socket().await);
 
-        // TODO: More than 278 hangs the test... figure out why
-        const MAX_CONNS: u16 = 278;
+        // TODO: A very high limit here appears to stall the tokio runtime. For the
+        // single-threaded scheduler on my machine, the limit is 278 simultaneous
+        // connections. For 2 core_threads, the limit varies, but I've seen it get as high
+        // as 800 on occasion.
+        const MAX_CONNS: u16 = 300;
 
         let local_conns: Vec<Connection> = join_all((0..MAX_CONNS).into_iter().map(|_: u16| {
             Connection::generate(Arc::clone(&local_socket), remote_socket.local_addr())
@@ -98,17 +101,13 @@ mod tests {
         });
 
         let recv_task = tokio::spawn(async move {
-            join_all(
-                local_conns
-                    .iter()
-                    .map(|conn| tokio::time::timeout(Duration::from_millis(500), conn.recv())),
-            )
-            .await
-            .into_iter()
-            .for_each(|result| match result {
-                Ok(result) => assert_eq!(result.unwrap(), ()),
-                Err(err) => error!("{}", err),
-            });
+            join_all(local_conns.iter().map(|conn| conn.recv()))
+                .await
+                .into_iter()
+                .for_each(|result| match result {
+                    Ok(result) => assert_eq!(result, ()),
+                    Err(err) => error!("{}", err),
+                });
         });
 
         let _ = tokio::join!(send_task, recv_task);
