@@ -33,7 +33,7 @@ impl UtpListener {
             let (packet, addr) = self.socket.get_syn().await?;
             if self
                 .socket
-                .init_connection(packet.connection_id)
+                .init_connection(packet.connection_id, addr)
                 .await
                 .is_ok()
             {

@@ -25,7 +25,7 @@ pub struct UtpSocket {
     socket: Mutex<UdpSocket>,
     // TODO: Do we need an async RwLock? I don't think we ever hold a lock across await
     //       points, and this isn't an IO resource...
-    connection_states: RwLock<HashMap<u16, SegQueue<(Packet, SocketAddr)>>>,
+    connection_states: RwLock<HashMap<(u16, SocketAddr), SegQueue<Packet>>>,
     syn_packets: SegQueue<(Packet, SocketAddr)>,
     local_addr: SocketAddr,
     // Maximum number of bytes the socket may have in-flight at any given time
@@ -39,7 +39,7 @@ pub struct UtpSocket {
 impl UtpSocket {
     pub fn new(
         socket: Mutex<UdpSocket>,
-        connection_states: RwLock<HashMap<u16, SegQueue<(Packet, SocketAddr)>>>,
+        connection_states: RwLock<HashMap<(u16, SocketAddr), SegQueue<Packet>>>,
         syn_packets: SegQueue<(Packet, SocketAddr)>,
         local_addr: SocketAddr,
     ) -> Self {
@@ -97,17 +97,17 @@ impl UtpSocket {
         Ok((packet, remote_addr))
     }
 
-    async fn route_packet(&self, packet: Packet, addr: SocketAddr) {
+    async fn route_packet(&self, packet: Packet, remote_addr: SocketAddr) {
         match self
             .connection_states
             .read()
             .await
-            .get(&packet.connection_id)
+            .get(&(packet.connection_id, remote_addr))
         {
-            Some(queue) => queue.push((packet, addr)),
+            Some(queue) => queue.push(packet),
             None => debug!(
                 "no connections found for packet from {}: {:?}",
-                addr, packet
+                remote_addr, packet
             ),
         }
     }
@@ -118,18 +118,23 @@ impl UtpSocket {
                 return Ok(packet_and_addr);
             }
 
-            let (packet, addr) = self.recv_from().await?;
+            let (packet, remote_addr) = self.recv_from().await?;
             if let PacketType::Syn = packet.packet_type {
-                return Ok((packet, addr));
+                return Ok((packet, remote_addr));
             } else {
-                self.route_packet(packet, addr).await;
+                self.route_packet(packet, remote_addr).await;
             }
         }
     }
 
-    pub async fn init_connection(&self, id: u16) -> Result<()> {
-        match self.connection_states.write().await.entry(id) {
-            Entry::Occupied(_) => Err(Error::ConnectionExists(id)),
+    pub async fn init_connection(&self, connection_id: u16, remote_addr: SocketAddr) -> Result<()> {
+        match self
+            .connection_states
+            .write()
+            .await
+            .entry((connection_id, remote_addr))
+        {
+            Entry::Occupied(_) => Err(Error::ConnectionExists(connection_id, remote_addr)),
             vacant => {
                 vacant.or_default();
                 Ok(())
@@ -137,46 +142,47 @@ impl UtpSocket {
         }
     }
 
-    pub async fn register_connection(&self) -> Result<u16> {
+    pub async fn register_connection(&self, remote_addr: SocketAddr) -> Result<u16> {
         let mut states = self.connection_states.write().await;
         let mut connection_id = 0;
-        while states.contains_key(&connection_id) {
+        while states.contains_key(&(connection_id, remote_addr)) {
             connection_id = connection_id
                 .checked_add(1)
                 .ok_or_else(|| Error::TooManyConnections)?;
         }
-        debug_assert!(states.insert(connection_id, Default::default()).is_none());
+        debug_assert!(states
+            .insert((connection_id, remote_addr), Default::default())
+            .is_none());
         Ok(connection_id)
     }
 
     pub async fn get_packet(&self, connection_id: u16, remote_addr: SocketAddr) -> Result<Packet> {
         loop {
-            if let Some(queue) = self.connection_states.read().await.get(&connection_id) {
-                while let Ok((packet, addr)) = queue.pop() {
-                    if addr == remote_addr {
-                        return Ok(packet);
-                    }
-                    debug!(
-                        "expected packet from {}, got one from {}",
-                        remote_addr, addr
-                    );
+            if let Some(queue) = self
+                .connection_states
+                .read()
+                .await
+                .get(&(connection_id, remote_addr))
+            {
+                if let Ok(packet) = queue.pop() {
+                    return Ok(packet);
                 }
             }
 
-            let (packet, addr) = self.recv_from().await?;
+            let (packet, actual_addr) = self.recv_from().await?;
             if let PacketType::Syn = packet.packet_type {
-                self.syn_packets.push((packet, addr));
+                self.syn_packets.push((packet, actual_addr));
             } else {
                 if packet.connection_id == connection_id {
-                    if addr == remote_addr {
+                    if actual_addr == remote_addr {
                         return Ok(packet);
                     }
                     debug!(
-                        "expected packet from {}, got one from {}",
-                        remote_addr, addr
+                        "connection {} expected packet from {}, got one from {}",
+                        connection_id, remote_addr, actual_addr
                     );
                 } else {
-                    self.route_packet(packet, addr).await;
+                    self.route_packet(packet, actual_addr).await;
                 }
             }
         }

@@ -28,7 +28,7 @@ impl Connection {
     }
 
     pub async fn generate(socket: Arc<UtpSocket>, remote_addr: SocketAddr) -> Result<Self> {
-        let connection_id = socket.register_connection().await?;
+        let connection_id = socket.register_connection(remote_addr).await?;
         Ok(Self::new(socket, connection_id, remote_addr))
     }
 
