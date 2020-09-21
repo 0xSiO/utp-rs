@@ -1,8 +1,10 @@
 pub mod error;
-pub mod listener;
+mod listener;
 mod packet;
 mod socket;
 mod stream;
+
+pub use crate::{listener::UtpListener, socket::UtpSocket, stream::UtpStream};
 
 // General overview of architecture:
 //
@@ -26,10 +28,7 @@ mod tests {
     use log::error;
 
     use super::*;
-    use listener::UtpListener;
     use packet::{Packet, PacketType};
-    use socket::UtpSocket;
-    use stream::UtpStream;
 
     fn init_logger() {
         let _ = pretty_env_logger::try_init();

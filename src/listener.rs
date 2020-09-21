@@ -15,17 +15,17 @@ pub struct UtpListener {
 }
 
 impl UtpListener {
-    pub fn new(socket: Arc<UtpSocket>) -> Self {
+    fn new(socket: Arc<UtpSocket>) -> Self {
         Self { socket }
-    }
-
-    pub fn local_addr(&self) -> SocketAddr {
-        self.socket.local_addr()
     }
 
     /// Creates a new UtpListener, which will be bound to the specified address.
     pub async fn bind(addr: impl ToSocketAddrs) -> Result<Self> {
         Ok(Self::new(Arc::new(UtpSocket::bind(addr).await?)))
+    }
+
+    pub fn local_addr(&self) -> SocketAddr {
+        self.socket.local_addr()
     }
 
     pub async fn accept(&self) -> Result<UtpStream> {
@@ -50,5 +50,17 @@ impl UtpListener {
                 ));
             }
         }
+    }
+}
+
+impl From<UtpSocket> for UtpListener {
+    fn from(socket: UtpSocket) -> Self {
+        Self::new(Arc::new(socket))
+    }
+}
+
+impl From<Arc<UtpSocket>> for UtpListener {
+    fn from(socket: Arc<UtpSocket>) -> Self {
+        Self::new(Arc::clone(&socket))
     }
 }

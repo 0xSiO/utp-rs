@@ -37,7 +37,7 @@ pub struct UtpSocket {
 }
 
 impl UtpSocket {
-    pub fn new(
+    fn new(
         socket: Mutex<UdpSocket>,
         connection_states: RwLock<HashMap<(u16, SocketAddr), SegQueue<Packet>>>,
         syn_packets: SegQueue<(Packet, SocketAddr)>,
@@ -51,10 +51,6 @@ impl UtpSocket {
         }
     }
 
-    pub fn local_addr(&self) -> SocketAddr {
-        self.local_addr
-    }
-
     pub async fn bind(local_addr: impl ToSocketAddrs) -> Result<Self> {
         let udp_socket = UdpSocket::bind(local_addr).await?;
         let local_addr = udp_socket.local_addr()?;
@@ -65,6 +61,10 @@ impl UtpSocket {
             Default::default(),
             local_addr,
         ))
+    }
+
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
     }
 
     pub async fn send_to(&self, packet: Packet, remote_addr: impl ToSocketAddrs) -> Result<usize> {
@@ -112,7 +112,7 @@ impl UtpSocket {
         }
     }
 
-    pub async fn get_syn(&self) -> Result<(Packet, SocketAddr)> {
+    pub(crate) async fn get_syn(&self) -> Result<(Packet, SocketAddr)> {
         loop {
             if let Ok(packet_and_addr) = self.syn_packets.pop() {
                 return Ok(packet_and_addr);
@@ -127,7 +127,11 @@ impl UtpSocket {
         }
     }
 
-    pub async fn init_connection(&self, connection_id: u16, remote_addr: SocketAddr) -> Result<()> {
+    pub(crate) async fn init_connection(
+        &self,
+        connection_id: u16,
+        remote_addr: SocketAddr,
+    ) -> Result<()> {
         match self
             .connection_states
             .write()
@@ -142,7 +146,7 @@ impl UtpSocket {
         }
     }
 
-    pub async fn register_connection(&self, remote_addr: SocketAddr) -> Result<u16> {
+    pub(crate) async fn register_connection(&self, remote_addr: SocketAddr) -> Result<u16> {
         let mut states = self.connection_states.write().await;
         let mut connection_id = 0;
         while states.contains_key(&(connection_id, remote_addr)) {
@@ -156,7 +160,11 @@ impl UtpSocket {
         Ok(connection_id)
     }
 
-    pub async fn get_packet(&self, connection_id: u16, remote_addr: SocketAddr) -> Result<Packet> {
+    pub(crate) async fn get_packet(
+        &self,
+        connection_id: u16,
+        remote_addr: SocketAddr,
+    ) -> Result<Packet> {
         loop {
             if let Some(queue) = self
                 .connection_states
@@ -186,5 +194,27 @@ impl UtpSocket {
                 }
             }
         }
+    }
+}
+
+impl TryFrom<UdpSocket> for UtpSocket {
+    type Error = Error;
+
+    fn try_from(socket: UdpSocket) -> Result<Self> {
+        let local_addr = socket.local_addr()?;
+        Ok(UtpSocket::new(
+            Mutex::new(socket),
+            Default::default(),
+            Default::default(),
+            local_addr,
+        ))
+    }
+}
+
+impl TryFrom<std::net::UdpSocket> for UtpSocket {
+    type Error = Error;
+
+    fn try_from(socket: std::net::UdpSocket) -> Result<Self> {
+        Self::try_from(UdpSocket::try_from(socket)?)
     }
 }
