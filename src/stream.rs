@@ -54,8 +54,10 @@ impl UtpStream {
 impl fmt::Debug for UtpStream {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_fmt(format_args!(
-            "UtpStream {{ id: {}, addr: {} }}",
-            self.connection_id, self.remote_addr
+            "UtpStream {{ id: {}, local_addr: {}, remote_addr: {} }}",
+            self.connection_id,
+            self.socket.local_addr(),
+            self.remote_addr
         ))
     }
 }
