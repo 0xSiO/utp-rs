@@ -7,14 +7,14 @@ mod stream;
 // General overview of architecture:
 //
 // A UtpSocket has the ability to send and receive packets through a UDP socket. Incoming
-// packets are queued and grouped by the connection ID field into a routing table.
-// Connections can request packets for a given connection ID, and a UtpListener can
-// request SYN packets from a separate queue in the UtpSocket.
+// packets are queued and grouped by (connection ID, remote addr) into a routing table.
+// UtpStreams can request packets for a given connection ID, and a UtpListener can request
+// SYN packets from a separate queue in the UtpSocket.
 //
 // Given a UtpSocket, a connection to a remote socket can be created by requesting a new
 // entry in the routing table.
 //
-// Connections and UtpListeners share ownership of the UtpSocket, so we can have a client
+// UtpStreams and UtpListeners share ownership of the UtpSocket, so we can have a client
 // configuration, a server configuration, or both configurations at once.
 
 #[cfg(test)]
