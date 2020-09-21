@@ -2,6 +2,7 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     convert::TryFrom,
     net::SocketAddr,
+    sync::RwLock,
 };
 
 use bytes::{Bytes, BytesMut};
@@ -9,7 +10,7 @@ use crossbeam_queue::SegQueue;
 use log::{debug, trace};
 use tokio::{
     net::{lookup_host, ToSocketAddrs, UdpSocket},
-    sync::{Mutex, RwLock},
+    sync::Mutex,
 };
 
 use crate::{
@@ -23,9 +24,7 @@ const MAX_DATAGRAM_SIZE: usize = 1472;
 #[derive(Debug)]
 pub struct UtpSocket {
     socket: Mutex<UdpSocket>,
-    // TODO: Do we need an async RwLock? I don't think we ever hold a lock across await
-    //       points, and this isn't an IO resource...
-    connection_states: RwLock<HashMap<(u16, SocketAddr), SegQueue<Packet>>>,
+    packet_queues: RwLock<HashMap<(u16, SocketAddr), SegQueue<Packet>>>,
     syn_packets: SegQueue<(Packet, SocketAddr)>,
     local_addr: SocketAddr,
     // Maximum number of bytes the socket may have in-flight at any given time
@@ -39,13 +38,13 @@ pub struct UtpSocket {
 impl UtpSocket {
     fn new(
         socket: Mutex<UdpSocket>,
-        connection_states: RwLock<HashMap<(u16, SocketAddr), SegQueue<Packet>>>,
+        packet_queues: RwLock<HashMap<(u16, SocketAddr), SegQueue<Packet>>>,
         syn_packets: SegQueue<(Packet, SocketAddr)>,
         local_addr: SocketAddr,
     ) -> Self {
         Self {
             socket,
-            connection_states,
+            packet_queues,
             syn_packets,
             local_addr,
         }
@@ -99,9 +98,9 @@ impl UtpSocket {
 
     async fn route_packet(&self, packet: Packet, remote_addr: SocketAddr) {
         match self
-            .connection_states
+            .packet_queues
             .read()
-            .await
+            .unwrap()
             .get(&(packet.connection_id, remote_addr))
         {
             Some(queue) => queue.push(packet),
@@ -133,9 +132,9 @@ impl UtpSocket {
         remote_addr: SocketAddr,
     ) -> Result<()> {
         match self
-            .connection_states
+            .packet_queues
             .write()
-            .await
+            .unwrap()
             .entry((connection_id, remote_addr))
         {
             Entry::Occupied(_) => Err(Error::ConnectionExists(connection_id, remote_addr)),
@@ -147,7 +146,7 @@ impl UtpSocket {
     }
 
     pub(crate) async fn register_connection(&self, remote_addr: SocketAddr) -> Result<u16> {
-        let mut states = self.connection_states.write().await;
+        let mut states = self.packet_queues.write().unwrap();
         let mut connection_id = 0;
         while states.contains_key(&(connection_id, remote_addr)) {
             connection_id = connection_id
@@ -167,9 +166,9 @@ impl UtpSocket {
     ) -> Result<Packet> {
         loop {
             if let Some(queue) = self
-                .connection_states
+                .packet_queues
                 .read()
-                .await
+                .unwrap()
                 .get(&(connection_id, remote_addr))
             {
                 if let Ok(packet) = queue.pop() {
