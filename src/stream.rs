@@ -1,20 +1,21 @@
 use std::{fmt, net::SocketAddr, sync::Arc};
 
 use log::debug;
+use tokio::net::{lookup_host, ToSocketAddrs};
 
 use crate::{error::*, socket::UtpSocket};
 
 // TODO: Need to figure out a plan to deal with lost packets: one idea is to have a queue
 // of unacked packets, pass a reference into the write future, and access the queue from
 // the future... something like that
-pub struct Connection {
+pub struct UtpStream {
     socket: Arc<UtpSocket>,
     connection_id: u16,
     remote_addr: SocketAddr,
     // TODO: Queued writes?
 }
 
-impl Connection {
+impl UtpStream {
     pub fn new(socket: Arc<UtpSocket>, connection_id: u16, remote_addr: SocketAddr) -> Self {
         Self {
             socket,
@@ -27,7 +28,11 @@ impl Connection {
         self.connection_id
     }
 
-    pub async fn generate(socket: Arc<UtpSocket>, remote_addr: SocketAddr) -> Result<Self> {
+    pub async fn connect(socket: Arc<UtpSocket>, remote_addr: impl ToSocketAddrs) -> Result<Self> {
+        let remote_addr = lookup_host(remote_addr)
+            .await?
+            .next()
+            .ok_or_else(|| Error::MissingAddress)?;
         let connection_id = socket.register_connection(remote_addr).await?;
         Ok(Self::new(socket, connection_id, remote_addr))
     }
@@ -46,10 +51,10 @@ impl Connection {
     }
 }
 
-impl fmt::Debug for Connection {
+impl fmt::Debug for UtpStream {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_fmt(format_args!(
-            "Connection {{ id: {}, addr: {} }}",
+            "UtpStream {{ id: {}, addr: {} }}",
             self.connection_id, self.remote_addr
         ))
     }

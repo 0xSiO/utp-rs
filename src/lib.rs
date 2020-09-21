@@ -1,8 +1,8 @@
-mod connection;
 pub mod error;
 pub mod listener;
 mod packet;
 mod socket;
+mod stream;
 
 // General overview of architecture:
 //
@@ -26,10 +26,10 @@ mod tests {
     use log::error;
 
     use super::*;
-    use connection::Connection;
     use listener::UtpListener;
     use packet::{Packet, PacketType};
     use socket::UtpSocket;
+    use stream::UtpStream;
 
     fn init_logger() {
         let _ = pretty_env_logger::try_init();
@@ -77,8 +77,8 @@ mod tests {
         // as 800 on occasion.
         const MAX_CONNS: u16 = 300;
 
-        let local_conns: Vec<Connection> = join_all((0..MAX_CONNS).into_iter().map(|_: u16| {
-            Connection::generate(Arc::clone(&local_socket), remote_socket.local_addr())
+        let local_conns: Vec<UtpStream> = join_all((0..MAX_CONNS).into_iter().map(|_: u16| {
+            UtpStream::connect(Arc::clone(&local_socket), remote_socket.local_addr())
         }))
         .await
         .into_iter()

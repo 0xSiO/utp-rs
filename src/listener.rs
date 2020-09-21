@@ -4,10 +4,10 @@ use bytes::Bytes;
 use tokio::net::ToSocketAddrs;
 
 use crate::{
-    connection::Connection,
     error::*,
     packet::{Packet, PacketType},
     socket::UtpSocket,
+    stream::UtpStream,
 };
 
 pub struct UtpListener {
@@ -28,7 +28,7 @@ impl UtpListener {
         Ok(Self::new(Arc::new(UtpSocket::bind(addr).await?)))
     }
 
-    pub async fn accept(&self) -> Result<Connection> {
+    pub async fn accept(&self) -> Result<UtpStream> {
         loop {
             let (packet, addr) = self.socket.get_syn().await?;
             if self
@@ -43,7 +43,7 @@ impl UtpListener {
                     PacketType::State, 1, packet.connection_id,
                     0, 0, 0, 0, 0, vec![], Bytes::new(),
                 );
-                return Ok(Connection::new(
+                return Ok(UtpStream::new(
                     Arc::clone(&self.socket),
                     packet.connection_id,
                     addr,
