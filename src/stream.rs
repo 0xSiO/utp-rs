@@ -16,16 +16,12 @@ pub struct UtpStream {
 }
 
 impl UtpStream {
-    pub fn new(socket: Arc<UtpSocket>, connection_id: u16, remote_addr: SocketAddr) -> Self {
+    pub(crate) fn new(socket: Arc<UtpSocket>, connection_id: u16, remote_addr: SocketAddr) -> Self {
         Self {
             socket,
             connection_id,
             remote_addr,
         }
-    }
-
-    pub fn connection_id(&self) -> u16 {
-        self.connection_id
     }
 
     pub async fn connect(socket: Arc<UtpSocket>, remote_addr: impl ToSocketAddrs) -> Result<Self> {
@@ -35,6 +31,10 @@ impl UtpStream {
             .ok_or_else(|| Error::MissingAddress)?;
         let connection_id = socket.register_connection(remote_addr).await?;
         Ok(Self::new(socket, connection_id, remote_addr))
+    }
+
+    pub fn connection_id(&self) -> u16 {
+        self.connection_id
     }
 
     pub async fn recv(&self) -> Result<()> {
