@@ -21,7 +21,7 @@ pub use crate::{listener::UtpListener, socket::UtpSocket, stream::UtpStream};
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::sync::Arc;
 
     use bytes::Bytes;
     use futures_util::future::join_all;
@@ -47,20 +47,15 @@ mod tests {
         init_logger();
 
         let listener = get_listener().await;
-        let listener_addr = listener.local_addr();
-        let task = tokio::spawn(async move {
-            let result = tokio::time::timeout(Duration::from_millis(500), listener.accept()).await;
-            match result {
-                Ok(Ok(_conn)) => {} // TODO: Check that conn is valid
-                Ok(Err(err)) => panic!("encountered error: {}", err),
-                Err(_) => {} // read timed out, probably due to packet loss
-            }
-        });
+
         #[rustfmt::skip]
         let syn = Packet::new(PacketType::Syn, 1, 10, 20, 0, 30, 1, 0, vec![], Bytes::new());
         let socket = get_socket().await;
-        socket.send_to(syn, listener_addr).await.unwrap();
-        task.await.unwrap();
+        socket.send_to(syn, listener.local_addr()).await.unwrap();
+
+        let conn = listener.accept().await.unwrap();
+        assert_eq!(conn.local_addr(), listener.local_addr());
+        assert_eq!(conn.remote_addr(), socket.local_addr());
     }
 
     #[tokio::test(core_threads = 2)]

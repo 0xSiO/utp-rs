@@ -37,6 +37,14 @@ impl UtpStream {
         self.connection_id
     }
 
+    pub fn local_addr(&self) -> SocketAddr {
+        self.socket.local_addr()
+    }
+
+    pub fn remote_addr(&self) -> SocketAddr {
+        self.remote_addr
+    }
+
     pub async fn recv(&self) -> Result<()> {
         let packet = self
             .socket
