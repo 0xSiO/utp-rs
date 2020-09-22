@@ -58,25 +58,25 @@ mod tests {
         assert_eq!(conn.remote_addr(), socket.local_addr());
     }
 
-    #[tokio::test(core_threads = 2)]
+    #[tokio::test]
     async fn routing_test() {
         init_logger();
 
         let local_socket = Arc::new(get_socket().await);
         let remote_socket = Arc::new(get_socket().await);
 
-        // TODO: A very high limit here appears to stall the tokio runtime. For the
-        // single-threaded scheduler on my machine, the limit is 278 simultaneous
-        // connections. For 2 core_threads, the limit varies, but I've seen it get as high
-        // as 800 on occasion.
-        const MAX_CONNS: u16 = 300;
+        // TODO: 279 simultaneous connections seems to stall the test. Figure out why
+        const MAX_CONNS: u16 = 278;
 
         let local_conns: Vec<UtpStream> = join_all((0..MAX_CONNS).into_iter().map(|_: u16| {
-            UtpStream::connect(Arc::clone(&local_socket), remote_socket.local_addr())
+            tokio::spawn(UtpStream::connect(
+                Arc::clone(&local_socket),
+                remote_socket.local_addr(),
+            ))
         }))
         .await
         .into_iter()
-        .map(|result| result.unwrap())
+        .map(|result| result.unwrap().unwrap())
         .collect();
 
         #[rustfmt::skip]
@@ -85,24 +85,24 @@ mod tests {
                         20, 0, 30, 1, 0, vec![], Bytes::new())
         }).collect();
 
-        let send_task = tokio::spawn(async move {
-            join_all((0..MAX_CONNS).into_iter().map(|i: u16| {
-                remote_socket.send_to(packets[i as usize].clone(), local_socket.local_addr())
-            }))
-            .await
-            .into_iter()
-            .for_each(|result| assert!(result.unwrap() > 0));
-        });
+        let send_task = join_all((0..MAX_CONNS).into_iter().map(|i: u16| {
+            let remote_socket = Arc::clone(&remote_socket);
+            let local_addr = local_socket.local_addr();
+            let packet = packets[i as usize].clone();
+            tokio::spawn(async move {
+                let result = remote_socket.send_to(packet, local_addr).await;
+                assert!(result.unwrap() > 0);
+            })
+        }));
 
-        let recv_task = tokio::spawn(async move {
-            join_all(local_conns.iter().map(|conn| conn.recv()))
-                .await
-                .into_iter()
-                .for_each(|result| match result {
+        let recv_task = join_all(local_conns.into_iter().map(|conn| {
+            tokio::spawn(async move {
+                match conn.recv().await {
                     Ok(result) => assert_eq!(result, ()),
                     Err(err) => error!("{}", err),
-                });
-        });
+                }
+            })
+        }));
 
         let _ = tokio::join!(send_task, recv_task);
     }
