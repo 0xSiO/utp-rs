@@ -1,26 +1,43 @@
 use std::{fmt, net::SocketAddr, sync::Arc};
 
+use bytes::BytesMut;
+use crossbeam_queue::SegQueue;
 use log::debug;
 use tokio::net::{lookup_host, ToSocketAddrs};
 
-use crate::{error::*, socket::UtpSocket};
+use crate::{error::*, packet::Packet, socket::UtpSocket};
 
-// TODO: Need to figure out a plan to deal with lost packets: one idea is to have a queue
-// of unacked packets, pass a reference into the write future, and access the queue from
-// the future... something like that
+// TODO: Need to figure out a plan to deal with lost packets
+#[allow(dead_code)]
 pub struct UtpStream {
     socket: Arc<UtpSocket>,
     connection_id: u16,
     remote_addr: SocketAddr,
-    // TODO: Queued writes?
+    // TODO: Track connection state
+    outbound_packets: SegQueue<Packet>,
+    sent_packets: SegQueue<Packet>,
+    inbound_packets: SegQueue<Packet>,
+    received_data: BytesMut,
 }
 
 impl UtpStream {
-    pub(crate) fn new(socket: Arc<UtpSocket>, connection_id: u16, remote_addr: SocketAddr) -> Self {
+    pub(crate) fn new(
+        socket: Arc<UtpSocket>,
+        connection_id: u16,
+        remote_addr: SocketAddr,
+        outbound_packets: SegQueue<Packet>,
+        sent_packets: SegQueue<Packet>,
+        inbound_packets: SegQueue<Packet>,
+        received_data: BytesMut,
+    ) -> Self {
         Self {
             socket,
             connection_id,
             remote_addr,
+            outbound_packets,
+            sent_packets,
+            inbound_packets,
+            received_data,
         }
     }
 
@@ -30,7 +47,16 @@ impl UtpStream {
             .next()
             .ok_or_else(|| Error::MissingAddress)?;
         let connection_id = socket.register_connection(remote_addr).await?;
-        Ok(Self::new(socket, connection_id, remote_addr))
+        Ok(Self::new(
+            socket,
+            connection_id,
+            remote_addr,
+            // TODO: Queue up a SYN to send
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        ))
     }
 
     pub fn connection_id(&self) -> u16 {
@@ -57,6 +83,9 @@ impl UtpStream {
         // TODO: Add packet data to some kind of internal buffer
         Ok(())
     }
+
+    // TODO: async fn write() to add to outgoing packet buffer
+    // TODO: async fn flush() to flush outgoing packet buffer
 }
 
 impl fmt::Debug for UtpStream {

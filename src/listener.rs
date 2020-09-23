@@ -47,6 +47,11 @@ impl UtpListener {
                     Arc::clone(&self.socket),
                     packet.connection_id,
                     addr,
+                    // TODO: Queue up a STATE to send
+                    Default::default(),
+                    Default::default(),
+                    Default::default(),
+                    Default::default(),
                 ));
             }
         }
