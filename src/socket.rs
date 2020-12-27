@@ -109,7 +109,7 @@ impl UtpSocket {
 
     pub(crate) async fn get_syn(&self) -> Result<(Packet, SocketAddr)> {
         loop {
-            if let Ok(packet_and_addr) = self.syn_packets.pop() {
+            if let Some(packet_and_addr) = self.syn_packets.pop() {
                 return Ok(packet_and_addr);
             }
 
@@ -167,7 +167,7 @@ impl UtpSocket {
                 .unwrap()
                 .get(&(connection_id, remote_addr))
             {
-                if let Ok(packet) = queue.pop() {
+                if let Some(packet) = queue.pop() {
                     return Ok(packet);
                 }
             }
