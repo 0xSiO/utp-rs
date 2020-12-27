@@ -34,7 +34,6 @@ impl UtpListener {
             if self
                 .socket
                 .init_connection(packet.connection_id, addr)
-                .await
                 .is_ok()
             {
                 // TODO: Craft valid state packet to respond to SYN

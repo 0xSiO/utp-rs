@@ -46,7 +46,7 @@ impl UtpStream {
             .await?
             .next()
             .ok_or_else(|| Error::MissingAddress)?;
-        let connection_id = socket.register_connection(remote_addr).await?;
+        let connection_id = socket.register_connection(remote_addr)?;
         Ok(Self::new(
             socket,
             connection_id,

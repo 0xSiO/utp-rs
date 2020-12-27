@@ -92,7 +92,7 @@ impl UtpSocket {
         Ok((packet, remote_addr))
     }
 
-    async fn route_packet(&self, packet: Packet, remote_addr: SocketAddr) {
+    fn route_packet(&self, packet: Packet, remote_addr: SocketAddr) {
         match self
             .packet_queues
             .read()
@@ -117,12 +117,12 @@ impl UtpSocket {
             if let PacketType::Syn = packet.packet_type {
                 return Ok((packet, remote_addr));
             } else {
-                self.route_packet(packet, remote_addr).await;
+                self.route_packet(packet, remote_addr);
             }
         }
     }
 
-    pub(crate) async fn init_connection(
+    pub(crate) fn init_connection(
         &self,
         connection_id: u16,
         remote_addr: SocketAddr,
@@ -141,7 +141,7 @@ impl UtpSocket {
         }
     }
 
-    pub(crate) async fn register_connection(&self, remote_addr: SocketAddr) -> Result<u16> {
+    pub(crate) fn register_connection(&self, remote_addr: SocketAddr) -> Result<u16> {
         let mut states = self.packet_queues.write().unwrap();
         let mut connection_id = 0;
         while states.contains_key(&(connection_id, remote_addr)) {
@@ -185,7 +185,7 @@ impl UtpSocket {
                         connection_id, remote_addr, actual_addr
                     );
                 } else {
-                    self.route_packet(packet, actual_addr).await;
+                    self.route_packet(packet, actual_addr);
                 }
             }
         }
