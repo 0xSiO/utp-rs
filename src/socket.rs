@@ -8,10 +8,7 @@ use std::{
 use bytes::{Bytes, BytesMut};
 use crossbeam_queue::SegQueue;
 use log::{debug, trace};
-use tokio::{
-    net::{lookup_host, ToSocketAddrs, UdpSocket},
-    sync::Mutex,
-};
+use tokio::net::{lookup_host, ToSocketAddrs, UdpSocket};
 
 use crate::{
     error::*,
@@ -24,7 +21,7 @@ const MAX_DATAGRAM_SIZE: usize = 1472;
 // TODO: Add a way to bulk-write a list of packets
 #[derive(Debug)]
 pub struct UtpSocket {
-    socket: Mutex<UdpSocket>,
+    socket: UdpSocket,
     packet_queues: RwLock<HashMap<(u16, SocketAddr), SegQueue<Packet>>>,
     syn_packets: SegQueue<(Packet, SocketAddr)>,
     local_addr: SocketAddr,
@@ -38,7 +35,7 @@ pub struct UtpSocket {
 
 impl UtpSocket {
     fn new(
-        socket: Mutex<UdpSocket>,
+        socket: UdpSocket,
         packet_queues: RwLock<HashMap<(u16, SocketAddr), SegQueue<Packet>>>,
         syn_packets: SegQueue<(Packet, SocketAddr)>,
         local_addr: SocketAddr,
@@ -56,7 +53,7 @@ impl UtpSocket {
         let local_addr = udp_socket.local_addr()?;
         trace!("binding to {}", local_addr);
         Ok(Self::new(
-            Mutex::new(udp_socket),
+            udp_socket,
             Default::default(),
             Default::default(),
             local_addr,
@@ -78,8 +75,6 @@ impl UtpSocket {
         );
         Ok(self
             .socket
-            .lock()
-            .await
             .send_to(&Bytes::from(packet), remote_addr)
             .await?)
     }
@@ -87,7 +82,7 @@ impl UtpSocket {
     pub async fn recv_from(&self) -> Result<(Packet, SocketAddr)> {
         let mut buf = BytesMut::with_capacity(MAX_DATAGRAM_SIZE);
         buf.resize(MAX_DATAGRAM_SIZE, 0);
-        let (bytes_read, remote_addr) = self.socket.lock().await.recv_from(&mut buf).await?;
+        let (bytes_read, remote_addr) = self.socket.recv_from(&mut buf).await?;
         buf.truncate(bytes_read);
         let packet = Packet::try_from(buf.freeze())?;
         debug!(
@@ -203,7 +198,7 @@ impl TryFrom<UdpSocket> for UtpSocket {
     fn try_from(socket: UdpSocket) -> Result<Self> {
         let local_addr = socket.local_addr()?;
         Ok(UtpSocket::new(
-            Mutex::new(socket),
+            socket,
             Default::default(),
             Default::default(),
             local_addr,

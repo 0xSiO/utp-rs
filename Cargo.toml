@@ -10,9 +10,9 @@ bytes = "0.5.6"
 crossbeam-queue = "0.2.3"
 log = "0.4.11"
 thiserror = "1.0.20"
-tokio = { version = "0.2.22", features = ["dns", "sync", "udp"] }
+tokio = { version = "1.0.1", features = ["net", "sync"] }
 
 [dev-dependencies]
 futures-util = "0.3.5"
 pretty_env_logger = "0.4.0"
-tokio = { version = "0.2.22", features = ["macros", "rt-threaded"] }
+tokio = { version = "1.0.1", features = ["macros", "rt-multi-thread"] }
