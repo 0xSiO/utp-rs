@@ -6,6 +6,7 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
+use futures_util::future::BoxFuture;
 use log::debug;
 use tokio::net::{lookup_host, ToSocketAddrs};
 
@@ -22,10 +23,11 @@ pub struct UtpStream {
     connection_id: u16,
     remote_addr: SocketAddr,
     // TODO: Track connection state
-    outbound_packets: RwLock<VecDeque<Packet>>,
-    sent_packets: RwLock<VecDeque<Packet>>,
-    inbound_packets: RwLock<VecDeque<Packet>>,
+    outbound_packets: Arc<RwLock<VecDeque<Packet>>>,
+    sent_packets: Arc<RwLock<VecDeque<Packet>>>,
+    inbound_packets: Arc<RwLock<VecDeque<Packet>>>,
     received_data: BytesMut,
+    write_future: Option<BoxFuture<'static, io::Result<usize>>>,
 }
 
 impl UtpStream {
@@ -33,10 +35,11 @@ impl UtpStream {
         socket: Arc<UtpSocket>,
         connection_id: u16,
         remote_addr: SocketAddr,
-        outbound_packets: RwLock<VecDeque<Packet>>,
-        sent_packets: RwLock<VecDeque<Packet>>,
-        inbound_packets: RwLock<VecDeque<Packet>>,
+        outbound_packets: Arc<RwLock<VecDeque<Packet>>>,
+        sent_packets: Arc<RwLock<VecDeque<Packet>>>,
+        inbound_packets: Arc<RwLock<VecDeque<Packet>>>,
         received_data: BytesMut,
+        write_future: Option<BoxFuture<'static, io::Result<usize>>>,
     ) -> Self {
         Self {
             socket,
@@ -46,6 +49,7 @@ impl UtpStream {
             sent_packets,
             inbound_packets,
             received_data,
+            write_future,
         }
     }
 
@@ -60,6 +64,7 @@ impl UtpStream {
             connection_id,
             remote_addr,
             // TODO: Queue up a SYN to send
+            Default::default(),
             Default::default(),
             Default::default(),
             Default::default(),
