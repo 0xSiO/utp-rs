@@ -79,7 +79,7 @@ impl UtpStream {
         self.remote_addr
     }
 
-    pub async fn recv(&mut self) -> Result<()> {
+    pub async fn recv(&self) -> Result<()> {
         let packet = self
             .socket
             .get_packet(self.connection_id, self.remote_addr)
@@ -90,10 +90,10 @@ impl UtpStream {
         );
         // TODO: Make sure data is added to internal buffer in the correct packet order, right now
         //       it could be completely out of order depending on how the packets arrive
-        self.received_data.extend(packet.data);
         Ok(())
     }
 
+    #[allow(dead_code)]
     async fn send(&self, buffer: &[u8]) -> io::Result<usize> {
         let mut outbound_packets = self.outbound_packets.write().unwrap();
         buffer.chunks(1400).for_each(|chunk| {
@@ -105,6 +105,7 @@ impl UtpStream {
         self.flush().await
     }
 
+    #[allow(dead_code)]
     async fn flush(&self) -> io::Result<usize> {
         let mut bytes_written: usize = 0;
         while let Some(packet) = self.outbound_packets.write().unwrap().pop_front() {
