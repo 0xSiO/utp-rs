@@ -119,11 +119,25 @@ mod tests {
 
         let mut stream = UtpStream::connect(local_socket, remote_addr).await.unwrap();
 
-        let message = &[1; crate::stream::MAX_DATA_SEGMENT_SIZE];
+        let message = &[1_u8; crate::stream::MAX_DATA_SEGMENT_SIZE];
         stream.write_all(message).await.unwrap();
         stream.flush().await.unwrap();
         let (packet, addr) = remote_socket.recv_from().await.unwrap();
+        assert_eq!(packet.data.len(), message.len());
         assert_eq!(packet.data.as_ref(), message);
         assert_eq!(addr, local_addr);
+
+        const NUM_PACKETS: usize = 4;
+        let large_message = &[1_u8; crate::stream::MAX_DATA_SEGMENT_SIZE * NUM_PACKETS];
+        stream.write_all(large_message).await.unwrap();
+        stream.flush().await.unwrap();
+
+        let mut result: Vec<u8> = Vec::with_capacity(large_message.len());
+        for _ in 0..NUM_PACKETS {
+            let (packet, _) = remote_socket.recv_from().await.unwrap();
+            result.extend(packet.data);
+        }
+        assert_eq!(result.len(), large_message.len());
+        assert_eq!(result, large_message);
     }
 }
