@@ -1,6 +1,7 @@
 use std::{
     collections::{hash_map::Entry, HashMap},
     convert::TryFrom,
+    io,
     net::SocketAddr,
     sync::RwLock,
 };
@@ -48,7 +49,7 @@ impl UtpSocket {
         }
     }
 
-    pub async fn bind(local_addr: impl ToSocketAddrs) -> Result<Self> {
+    pub async fn bind(local_addr: impl ToSocketAddrs) -> io::Result<Self> {
         let udp_socket = UdpSocket::bind(local_addr).await?;
         let local_addr = udp_socket.local_addr()?;
         trace!("binding to {}", local_addr);
@@ -64,11 +65,15 @@ impl UtpSocket {
         self.local_addr
     }
 
-    pub async fn send_to(&self, packet: Packet, remote_addr: impl ToSocketAddrs) -> Result<usize> {
+    pub async fn send_to(
+        &self,
+        packet: Packet,
+        remote_addr: impl ToSocketAddrs,
+    ) -> io::Result<usize> {
         let remote_addr = lookup_host(remote_addr)
             .await?
             .next()
-            .ok_or_else(|| Error::MissingAddress)?;
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, Error::MissingAddress))?;
         debug!(
             "{} -> {} {:?}",
             self.local_addr, remote_addr, packet.packet_type

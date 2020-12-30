@@ -1,7 +1,14 @@
-use std::{fmt, net::SocketAddr, sync::Arc};
+use std::{
+    collections::VecDeque,
+    fmt, io,
+    net::SocketAddr,
+    pin::Pin,
+    sync::{Arc, RwLock},
+    task::{Context, Poll},
+};
 
 use bytes::BytesMut;
-use crossbeam_queue::SegQueue;
+use futures_util::io::AsyncWrite;
 use log::debug;
 use tokio::net::{lookup_host, ToSocketAddrs};
 
@@ -14,9 +21,9 @@ pub struct UtpStream {
     connection_id: u16,
     remote_addr: SocketAddr,
     // TODO: Track connection state
-    outbound_packets: SegQueue<Packet>,
-    sent_packets: SegQueue<Packet>,
-    inbound_packets: SegQueue<Packet>,
+    outbound_packets: RwLock<VecDeque<Packet>>,
+    sent_packets: RwLock<VecDeque<Packet>>,
+    inbound_packets: RwLock<VecDeque<Packet>>,
     received_data: BytesMut,
 }
 
@@ -25,9 +32,9 @@ impl UtpStream {
         socket: Arc<UtpSocket>,
         connection_id: u16,
         remote_addr: SocketAddr,
-        outbound_packets: SegQueue<Packet>,
-        sent_packets: SegQueue<Packet>,
-        inbound_packets: SegQueue<Packet>,
+        outbound_packets: RwLock<VecDeque<Packet>>,
+        sent_packets: RwLock<VecDeque<Packet>>,
+        inbound_packets: RwLock<VecDeque<Packet>>,
         received_data: BytesMut,
     ) -> Self {
         Self {
@@ -80,12 +87,27 @@ impl UtpStream {
             "connection {} received {:?} from {}",
             self.connection_id, packet.packet_type, self.remote_addr
         );
-        // TODO: Add packet data to some kind of internal buffer
+        // TODO: Add packet data to some kind of internal buffer, but make sure it's in order
         Ok(())
     }
 
-    // TODO: async fn write() to add to outgoing packet buffer
-    // TODO: async fn flush() to flush outgoing packet buffer
+    async fn flush_outbound_packets(&self) -> io::Result<usize> {
+        let mut bytes_written: usize = 0;
+        while let Some(packet) = self.outbound_packets.write().unwrap().pop_front() {
+            match self.socket.send_to(packet.clone(), self.remote_addr).await {
+                Ok(num_bytes) => {
+                    bytes_written += num_bytes;
+                    self.sent_packets.write().unwrap().push_back(packet);
+                }
+                err => {
+                    // Re-queue the packet to try sending again
+                    self.outbound_packets.write().unwrap().push_front(packet);
+                    return err;
+                }
+            }
+        }
+        Ok(bytes_written)
+    }
 }
 
 impl fmt::Debug for UtpStream {
@@ -96,5 +118,23 @@ impl fmt::Debug for UtpStream {
             self.socket.local_addr(),
             self.remote_addr
         ))
+    }
+}
+
+impl AsyncWrite for UtpStream {
+    // Split given buffer into packets, add packets to outgoing packet buffer, then poll a stored
+    // future
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
+        // TODO: Make sure any initialization is out of the way first
+        todo!()
+    }
+
+    // Poll stored future if available, if not, create and poll
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        todo!()
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        self.poll_flush(cx)
     }
 }
