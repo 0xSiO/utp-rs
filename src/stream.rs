@@ -5,11 +5,15 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use log::debug;
 use tokio::net::{lookup_host, ToSocketAddrs};
 
-use crate::{error::*, packet::Packet, socket::UtpSocket};
+use crate::{
+    error::*,
+    packet::{Packet, PacketType},
+    socket::UtpSocket,
+};
 
 // TODO: Need to figure out a plan to deal with lost packets
 #[allow(dead_code)]
@@ -75,7 +79,7 @@ impl UtpStream {
         self.remote_addr
     }
 
-    pub async fn recv(&self) -> Result<()> {
+    pub async fn recv(&mut self) -> Result<()> {
         let packet = self
             .socket
             .get_packet(self.connection_id, self.remote_addr)
@@ -84,11 +88,24 @@ impl UtpStream {
             "connection {} received {:?} from {}",
             self.connection_id, packet.packet_type, self.remote_addr
         );
-        // TODO: Add packet data to some kind of internal buffer, but make sure it's in order
+        // TODO: Make sure data is added to internal buffer in the correct packet order, right now
+        //       it could be completely out of order depending on how the packets arrive
+        self.received_data.extend(packet.data);
         Ok(())
     }
 
-    async fn write_outbound_packets(&self) -> io::Result<usize> {
+    async fn send(&self, buffer: &[u8]) -> io::Result<usize> {
+        let mut outbound_packets = self.outbound_packets.write().unwrap();
+        buffer.chunks(1400).for_each(|chunk| {
+            #[rustfmt::skip]
+            // TODO: Use actual values for packet fields
+            outbound_packets.push_back(Packet::new(PacketType::Data, 1, self.connection_id(), 0, 0, 0,
+                                                   0, 0, vec![], Bytes::copy_from_slice(chunk)));
+        });
+        self.flush().await
+    }
+
+    async fn flush(&self) -> io::Result<usize> {
         let mut bytes_written: usize = 0;
         while let Some(packet) = self.outbound_packets.write().unwrap().pop_front() {
             match self.socket.send_to(packet.clone(), self.remote_addr).await {

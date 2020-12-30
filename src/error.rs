@@ -13,6 +13,7 @@ pub enum Error {
     #[error("connection to {1} with id {0} already exists")]
     ConnectionExists(u16, SocketAddr),
     #[error(transparent)]
+    // TODO: Could this be replaced with an io::Error with kind io::ErrorKind::InvalidData?
     PacketParseError(#[from] PacketParseError),
     #[error(transparent)]
     IOError(#[from] std::io::Error),
