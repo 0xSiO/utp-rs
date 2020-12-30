@@ -24,8 +24,8 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use futures_util::future::join_all;
-    use log::error;
+    use futures_util::{future::join_all, io::AsyncWriteExt};
+    use log::*;
 
     use super::*;
     use packet::{Packet, PacketType};
@@ -105,5 +105,25 @@ mod tests {
         }));
 
         let _ = tokio::join!(send_task, recv_task);
+    }
+
+    #[tokio::test]
+    async fn async_write_test() {
+        init_logger();
+
+        let local_socket = Arc::new(get_socket().await);
+        let remote_socket = Arc::new(get_socket().await);
+
+        let local_addr = local_socket.local_addr();
+        let remote_addr = remote_socket.local_addr();
+
+        let mut stream = UtpStream::connect(local_socket, remote_addr).await.unwrap();
+
+        let message = &[1; crate::stream::MAX_DATA_SEGMENT_SIZE];
+        stream.write_all(message).await.unwrap();
+        stream.flush().await.unwrap();
+        let (packet, addr) = remote_socket.recv_from().await.unwrap();
+        assert_eq!(packet.data.as_ref(), message);
+        assert_eq!(addr, local_addr);
     }
 }

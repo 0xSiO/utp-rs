@@ -5,7 +5,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use crate::error::*;
 
 /// See http://bittorrent.org/beps/bep_0029.html#header-format
-const PACKET_HEADER_LEN: usize = 20;
+pub(crate) const PACKET_HEADER_LEN: usize = 20;
 
 /// See http://bittorrent.org/beps/bep_0029.html#type
 #[repr(u8)]

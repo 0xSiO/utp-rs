@@ -2,11 +2,13 @@ use std::{
     collections::VecDeque,
     fmt, io,
     net::SocketAddr,
-    sync::{Arc, RwLock},
+    pin::Pin,
+    sync::{Arc, Mutex, RwLock},
+    task::{Context, Poll},
 };
 
 use bytes::{Bytes, BytesMut};
-use futures_util::future::BoxFuture;
+use futures_util::{future::BoxFuture, io::AsyncWrite, ready};
 use log::debug;
 use tokio::net::{lookup_host, ToSocketAddrs};
 
@@ -16,6 +18,9 @@ use crate::{
     socket::UtpSocket,
 };
 
+pub(crate) const MAX_DATA_SEGMENT_SIZE: usize =
+    crate::socket::MAX_DATAGRAM_SIZE - crate::packet::PACKET_HEADER_LEN;
+
 // TODO: Need to figure out a plan to deal with lost packets
 #[allow(dead_code)]
 pub struct UtpStream {
@@ -23,11 +28,15 @@ pub struct UtpStream {
     connection_id: u16,
     remote_addr: SocketAddr,
     // TODO: Track connection state
+    // TODO: Don't use outbound packets, use outbound byte slices (packets contain timing
+    //       information which will be stale when it's time to actually send the packets)
     outbound_packets: Arc<RwLock<VecDeque<Packet>>>,
     sent_packets: Arc<RwLock<VecDeque<Packet>>>,
     inbound_packets: Arc<RwLock<VecDeque<Packet>>>,
     received_data: BytesMut,
-    write_future: Option<BoxFuture<'static, io::Result<usize>>>,
+    // Technically 'static to avoid self-referential fields, but should never outlive the stream.
+    // The future is wrapped in a Mutex to make the whole stream Sync.
+    flush_future: Option<Mutex<BoxFuture<'static, io::Result<()>>>>,
 }
 
 impl UtpStream {
@@ -39,7 +48,7 @@ impl UtpStream {
         sent_packets: Arc<RwLock<VecDeque<Packet>>>,
         inbound_packets: Arc<RwLock<VecDeque<Packet>>>,
         received_data: BytesMut,
-        write_future: Option<BoxFuture<'static, io::Result<usize>>>,
+        flush_future: Option<Mutex<BoxFuture<'static, io::Result<()>>>>,
     ) -> Self {
         Self {
             socket,
@@ -49,7 +58,7 @@ impl UtpStream {
             sent_packets,
             inbound_packets,
             received_data,
-            write_future,
+            flush_future,
         }
     }
 
@@ -98,35 +107,40 @@ impl UtpStream {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    async fn send(&self, buffer: &[u8]) -> io::Result<usize> {
-        let mut outbound_packets = self.outbound_packets.write().unwrap();
-        buffer.chunks(1400).for_each(|chunk| {
-            #[rustfmt::skip]
-            // TODO: Use actual values for packet fields
-            outbound_packets.push_back(Packet::new(PacketType::Data, 1, self.connection_id(), 0, 0, 0,
-                                                   0, 0, vec![], Bytes::copy_from_slice(chunk)));
-        });
-        self.flush().await
-    }
-
-    #[allow(dead_code)]
-    async fn flush(&self) -> io::Result<usize> {
-        let mut bytes_written: usize = 0;
-        while let Some(packet) = self.outbound_packets.write().unwrap().pop_front() {
-            match self.socket.send_to(packet.clone(), self.remote_addr).await {
-                Ok(num_bytes) => {
-                    bytes_written += num_bytes;
-                    self.sent_packets.write().unwrap().push_back(packet);
+    async fn flush(
+        socket: Arc<UtpSocket>,
+        remote_addr: SocketAddr,
+        outbound_packets: Arc<RwLock<VecDeque<Packet>>>,
+        sent_packets: Arc<RwLock<VecDeque<Packet>>>,
+    ) -> io::Result<()> {
+        loop {
+            let maybe_packet = outbound_packets.write().unwrap().pop_front();
+            if let Some(packet) = maybe_packet {
+                match socket.send_to(packet.clone(), remote_addr).await {
+                    Ok(_) => {
+                        sent_packets.write().unwrap().push_back(packet);
+                    }
+                    Err(err) => {
+                        // Re-queue the packet to try sending again
+                        outbound_packets.write().unwrap().push_front(packet);
+                        return Err(err);
+                    }
                 }
-                err => {
-                    // Re-queue the packet to try sending again
-                    self.outbound_packets.write().unwrap().push_front(packet);
-                    return err;
-                }
+            } else {
+                break;
             }
         }
-        Ok(bytes_written)
+        Ok(())
+    }
+
+    fn init_flush_future(&mut self) {
+        let socket = Arc::clone(&self.socket);
+        let remote_addr = self.remote_addr();
+        let outbound_packets = Arc::clone(&self.outbound_packets);
+        let sent_packets = Arc::clone(&self.sent_packets);
+        self.flush_future = Some(Mutex::new(Box::pin(async move {
+            Self::flush(socket, remote_addr, outbound_packets, sent_packets).await
+        })));
     }
 }
 
@@ -138,5 +152,40 @@ impl fmt::Debug for UtpStream {
             self.socket.local_addr(),
             self.remote_addr
         ))
+    }
+}
+
+impl AsyncWrite for UtpStream {
+    fn poll_write(self: Pin<&mut Self>, _cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
+        let mut outbound_packets = self.outbound_packets.write().unwrap();
+        // TODO: Don't copy each chunk, use Bytes::split_to to get the bytes for each packet
+        buf.chunks(MAX_DATA_SEGMENT_SIZE).for_each(|chunk| {
+            #[rustfmt::skip]
+            // TODO: Use actual values for packet fields
+            outbound_packets.push_back(Packet::new(PacketType::Data, 1, self.connection_id(), 0, 0, 0,
+                                                   0, 0, vec![], Bytes::copy_from_slice(chunk)));
+        });
+        Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        if self.flush_future.is_none() {
+            self.init_flush_future();
+        }
+
+        let result = ready!({
+            // TODO: Should we use try_lock here?
+            let mut future = self.flush_future.as_mut().unwrap().lock().unwrap();
+            future.as_mut().poll(cx)
+        });
+        // Remove the future if it finished
+        self.flush_future.take();
+        Poll::Ready(result)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        // TODO: We could set a shutdown flag on UtpStream and return Ok(0) for any future calls to
+        //       poll_write, effectively preventing any more packets from being sent
+        self.poll_flush(cx)
     }
 }

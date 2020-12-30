@@ -17,7 +17,7 @@ use crate::{
 };
 
 // Ethernet MTU minus IP/UDP header sizes. TODO: Use path MTU discovery
-const MAX_DATAGRAM_SIZE: usize = 1472;
+pub(crate) const MAX_DATAGRAM_SIZE: usize = 1472;
 
 // TODO: Add a way to bulk-write a list of packets
 #[derive(Debug)]
