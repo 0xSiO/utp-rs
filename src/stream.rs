@@ -1,24 +1,15 @@
 use std::{
     collections::VecDeque,
-    fmt,
-    future::Future,
-    io,
+    fmt, io,
     net::SocketAddr,
-    pin::Pin,
     sync::{Arc, RwLock},
-    task::{Context, Poll},
 };
 
-use bytes::{Bytes, BytesMut};
-use futures_util::{future::LocalBoxFuture, io::AsyncWrite, ready};
+use bytes::BytesMut;
 use log::debug;
 use tokio::net::{lookup_host, ToSocketAddrs};
 
-use crate::{
-    error::*,
-    packet::{Packet, PacketType},
-    socket::UtpSocket,
-};
+use crate::{error::*, packet::Packet, socket::UtpSocket};
 
 // TODO: Need to figure out a plan to deal with lost packets
 #[allow(dead_code)]
@@ -31,7 +22,6 @@ pub struct UtpStream {
     sent_packets: RwLock<VecDeque<Packet>>,
     inbound_packets: RwLock<VecDeque<Packet>>,
     received_data: BytesMut,
-    write_future: Option<LocalBoxFuture<'static, io::Result<usize>>>,
 }
 
 impl UtpStream {
@@ -43,7 +33,6 @@ impl UtpStream {
         sent_packets: RwLock<VecDeque<Packet>>,
         inbound_packets: RwLock<VecDeque<Packet>>,
         received_data: BytesMut,
-        write_future: Option<LocalBoxFuture<'static, io::Result<usize>>>,
     ) -> Self {
         Self {
             socket,
@@ -53,7 +42,6 @@ impl UtpStream {
             sent_packets,
             inbound_packets,
             received_data,
-            write_future,
         }
     }
 
@@ -68,7 +56,6 @@ impl UtpStream {
             connection_id,
             remote_addr,
             // TODO: Queue up a SYN to send
-            Default::default(),
             Default::default(),
             Default::default(),
             Default::default(),
@@ -118,13 +105,6 @@ impl UtpStream {
         }
         Ok(bytes_written)
     }
-
-    fn poll_write_outbound_packets(&mut self, cx: &mut Context) -> Poll<io::Result<usize>> {
-        let bytes_written = ready!(self.write_future.as_mut().unwrap().as_mut().poll(cx));
-        // Remove the future if it finished
-        self.write_future.take();
-        Poll::Ready(bytes_written)
-    }
 }
 
 impl fmt::Debug for UtpStream {
@@ -135,46 +115,5 @@ impl fmt::Debug for UtpStream {
             self.socket.local_addr(),
             self.remote_addr
         ))
-    }
-}
-
-impl AsyncWrite for UtpStream {
-    // Split given buffer into packets, add packets to outgoing packet buffer, then poll a stored
-    // future
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        // TODO: Make sure any initialization is out of the way first
-        #[rustfmt::skip]
-        let packets = buf.chunks(1400).map(|chunk| {
-            // TODO: Fill out rest of packet fields later
-            Packet::new(PacketType::Data, 1, self.connection_id(), 0, 0, 0, 0, 0, vec![],
-                Bytes::copy_from_slice(chunk))
-        });
-
-        {
-            let mut outbound_packets = self.outbound_packets.write().unwrap();
-            for packet in packets {
-                outbound_packets.push_back(packet);
-            }
-        }
-
-        if self.write_future.is_some() {
-            self.poll_write_outbound_packets(cx)
-        } else {
-            self.write_future = Some(Box::pin(async move { self.write_outbound_packets().await }));
-            self.poll_write_outbound_packets(cx)
-        }
-    }
-
-    // Poll stored future if available, if not, create and poll
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        todo!()
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        self.poll_flush(cx)
     }
 }
