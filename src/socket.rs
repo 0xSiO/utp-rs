@@ -94,8 +94,12 @@ impl UtpSocket {
         packet: Packet,
         remote_addr: SocketAddr,
     ) -> Poll<io::Result<usize>> {
-        let datagram = Bytes::from(packet);
+        let datagram = Bytes::from(packet.clone());
         let bytes_written = ready!(self.socket.poll_send_to(cx, &datagram, remote_addr))?;
+        debug!(
+            "{} -> {} {:?} ({} bytes)",
+            self.local_addr, remote_addr, packet.packet_type, bytes_written
+        );
         debug_assert_eq!(bytes_written, datagram.len());
         Poll::Ready(Ok(bytes_written))
     }
