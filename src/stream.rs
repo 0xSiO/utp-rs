@@ -3,12 +3,12 @@ use std::{
     fmt, io,
     net::SocketAddr,
     pin::Pin,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, RwLock},
     task::{Context, Poll},
 };
 
 use bytes::{Bytes, BytesMut};
-use futures_util::{future::BoxFuture, io::AsyncWrite, ready};
+use futures_util::io::AsyncWrite;
 use log::debug;
 use tokio::net::{lookup_host, ToSocketAddrs};
 
@@ -34,9 +34,6 @@ pub struct UtpStream {
     sent_packets: Arc<RwLock<VecDeque<Packet>>>,
     inbound_packets: Arc<RwLock<VecDeque<Packet>>>,
     received_data: BytesMut,
-    // Technically 'static to avoid self-referential fields, but should never outlive the stream.
-    // The future is wrapped in a Mutex to make the whole stream Sync.
-    flush_future: Option<Mutex<BoxFuture<'static, io::Result<()>>>>,
 }
 
 impl UtpStream {
@@ -48,7 +45,6 @@ impl UtpStream {
         sent_packets: Arc<RwLock<VecDeque<Packet>>>,
         inbound_packets: Arc<RwLock<VecDeque<Packet>>>,
         received_data: BytesMut,
-        flush_future: Option<Mutex<BoxFuture<'static, io::Result<()>>>>,
     ) -> Self {
         Self {
             socket,
@@ -58,7 +54,6 @@ impl UtpStream {
             sent_packets,
             inbound_packets,
             received_data,
-            flush_future,
         }
     }
 
@@ -73,7 +68,6 @@ impl UtpStream {
             connection_id,
             remote_addr,
             // TODO: Queue up a SYN to send
-            Default::default(),
             Default::default(),
             Default::default(),
             Default::default(),
@@ -107,40 +101,31 @@ impl UtpStream {
         Ok(())
     }
 
-    async fn flush(
-        socket: Arc<UtpSocket>,
-        remote_addr: SocketAddr,
-        outbound_packets: Arc<RwLock<VecDeque<Packet>>>,
-        sent_packets: Arc<RwLock<VecDeque<Packet>>>,
-    ) -> io::Result<()> {
-        loop {
-            let maybe_packet = outbound_packets.write().unwrap().pop_front();
-            if let Some(packet) = maybe_packet {
-                match socket.send_to(packet.clone(), remote_addr).await {
-                    Ok(_) => {
-                        sent_packets.write().unwrap().push_back(packet);
-                    }
-                    Err(err) => {
-                        // Re-queue the packet to try sending again
-                        outbound_packets.write().unwrap().push_front(packet);
-                        return Err(err);
-                    }
+    fn poll_flush_priv(&mut self, cx: &mut Context) -> Poll<io::Result<()>> {
+        while let Some(packet) = self.outbound_packets.write().unwrap().pop_front() {
+            match self
+                .socket
+                .poll_send_to(cx, packet.clone(), self.remote_addr)
+            {
+                Poll::Pending => {
+                    self.outbound_packets.write().unwrap().push_front(packet);
+                    return Poll::Pending;
                 }
-            } else {
-                break;
+                // TODO: Limit number of retries?
+                Poll::Ready(Err(err)) if err.kind() == io::ErrorKind::Interrupted => {
+                    self.outbound_packets.write().unwrap().push_front(packet);
+                    continue;
+                }
+                Poll::Ready(Err(err)) => {
+                    self.outbound_packets.write().unwrap().push_front(packet);
+                    return Poll::Ready(Err(err));
+                }
+                Poll::Ready(Ok(_)) => {
+                    self.sent_packets.write().unwrap().push_back(packet);
+                }
             }
         }
-        Ok(())
-    }
-
-    fn init_flush_future(&mut self) {
-        let socket = Arc::clone(&self.socket);
-        let remote_addr = self.remote_addr();
-        let outbound_packets = Arc::clone(&self.outbound_packets);
-        let sent_packets = Arc::clone(&self.sent_packets);
-        self.flush_future = Some(Mutex::new(Box::pin(async move {
-            Self::flush(socket, remote_addr, outbound_packets, sent_packets).await
-        })));
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -169,18 +154,7 @@ impl AsyncWrite for UtpStream {
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        if self.flush_future.is_none() {
-            self.init_flush_future();
-        }
-
-        let result = ready!({
-            // TODO: Should we use try_lock here?
-            let mut future = self.flush_future.as_mut().unwrap().lock().unwrap();
-            future.as_mut().poll(cx)
-        });
-        // Remove the future if it finished
-        self.flush_future.take();
-        Poll::Ready(result)
+        self.poll_flush_priv(cx)
     }
 
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {

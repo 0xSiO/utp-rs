@@ -4,10 +4,12 @@ use std::{
     io,
     net::SocketAddr,
     sync::RwLock,
+    task::{Context, Poll},
 };
 
 use bytes::{Bytes, BytesMut};
 use crossbeam_queue::SegQueue;
+use futures_util::ready;
 use log::{debug, trace};
 use tokio::net::{lookup_host, ToSocketAddrs, UdpSocket};
 
@@ -82,6 +84,20 @@ impl UtpSocket {
             .socket
             .send_to(&Bytes::from(packet), remote_addr)
             .await?)
+    }
+
+    // TODO: This method assumes that the packet will be sent with one successful call to poll_send_to, i.e.
+    //       the number of bytes written to the socket will equal the number of bytes in the packet
+    pub fn poll_send_to(
+        &self,
+        cx: &mut Context,
+        packet: Packet,
+        remote_addr: SocketAddr,
+    ) -> Poll<io::Result<usize>> {
+        let datagram = Bytes::from(packet);
+        let bytes_written = ready!(self.socket.poll_send_to(cx, &datagram, remote_addr))?;
+        debug_assert_eq!(bytes_written, datagram.len());
+        Poll::Ready(Ok(bytes_written))
     }
 
     pub async fn recv_from(&self) -> Result<(Packet, SocketAddr)> {
