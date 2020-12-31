@@ -28,9 +28,7 @@ pub struct UtpStream {
     connection_id: u16,
     remote_addr: SocketAddr,
     // TODO: Track connection state
-    // TODO: Don't use outbound packets, use outbound byte slices (packets contain timing
-    //       information which will be stale when it's time to actually send the packets)
-    outbound_packets: Arc<RwLock<VecDeque<Packet>>>,
+    outbound_chunks: Arc<RwLock<VecDeque<Bytes>>>,
     sent_packets: Arc<RwLock<VecDeque<Packet>>>,
     inbound_packets: Arc<RwLock<VecDeque<Packet>>>,
     received_data: BytesMut,
@@ -41,7 +39,7 @@ impl UtpStream {
         socket: Arc<UtpSocket>,
         connection_id: u16,
         remote_addr: SocketAddr,
-        outbound_packets: Arc<RwLock<VecDeque<Packet>>>,
+        outbound_chunks: Arc<RwLock<VecDeque<Bytes>>>,
         sent_packets: Arc<RwLock<VecDeque<Packet>>>,
         inbound_packets: Arc<RwLock<VecDeque<Packet>>>,
         received_data: BytesMut,
@@ -50,7 +48,7 @@ impl UtpStream {
             socket,
             connection_id,
             remote_addr,
-            outbound_packets,
+            outbound_chunks,
             sent_packets,
             inbound_packets,
             received_data,
@@ -101,23 +99,37 @@ impl UtpStream {
         Ok(())
     }
 
+    fn poll_write_priv(&mut self, _cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
+        let mut outbound_chunks = self.outbound_chunks.write().unwrap();
+        // TODO: Don't copy each chunk, use Bytes::split_to to get the bytes for each packet
+        buf.chunks(MAX_DATA_SEGMENT_SIZE).for_each(|chunk| {
+            outbound_chunks.push_back(Bytes::copy_from_slice(chunk));
+        });
+        Poll::Ready(Ok(buf.len()))
+    }
+
     fn poll_flush_priv(&mut self, cx: &mut Context) -> Poll<io::Result<()>> {
-        while let Some(packet) = self.outbound_packets.write().unwrap().pop_front() {
+        while let Some(chunk) = self.outbound_chunks.write().unwrap().pop_front() {
+            // TODO: Use actual values for packet fields
+            #[rustfmt::skip]
+            let packet = Packet::new(PacketType::Data, 1, self.connection_id(), 0, 0, 0, 0, 0,
+                                     vec![], chunk.clone());
+
             match self
                 .socket
                 .poll_send_to(cx, packet.clone(), self.remote_addr)
             {
                 Poll::Pending => {
-                    self.outbound_packets.write().unwrap().push_front(packet);
+                    self.outbound_chunks.write().unwrap().push_front(chunk);
                     return Poll::Pending;
                 }
                 // TODO: Limit number of retries?
                 Poll::Ready(Err(err)) if err.kind() == io::ErrorKind::Interrupted => {
-                    self.outbound_packets.write().unwrap().push_front(packet);
+                    self.outbound_chunks.write().unwrap().push_front(chunk);
                     continue;
                 }
                 Poll::Ready(Err(err)) => {
-                    self.outbound_packets.write().unwrap().push_front(packet);
+                    self.outbound_chunks.write().unwrap().push_front(chunk);
                     return Poll::Ready(Err(err));
                 }
                 Poll::Ready(Ok(_)) => {
@@ -141,16 +153,12 @@ impl fmt::Debug for UtpStream {
 }
 
 impl AsyncWrite for UtpStream {
-    fn poll_write(self: Pin<&mut Self>, _cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
-        let mut outbound_packets = self.outbound_packets.write().unwrap();
-        // TODO: Don't copy each chunk, use Bytes::split_to to get the bytes for each packet
-        buf.chunks(MAX_DATA_SEGMENT_SIZE).for_each(|chunk| {
-            #[rustfmt::skip]
-            // TODO: Use actual values for packet fields
-            outbound_packets.push_back(Packet::new(PacketType::Data, 1, self.connection_id(), 0, 0, 0,
-                                                   0, 0, vec![], Bytes::copy_from_slice(chunk)));
-        });
-        Poll::Ready(Ok(buf.len()))
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        self.poll_write_priv(cx, buf)
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
