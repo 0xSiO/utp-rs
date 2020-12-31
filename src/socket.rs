@@ -11,7 +11,10 @@ use bytes::{Bytes, BytesMut};
 use crossbeam_queue::SegQueue;
 use futures_util::ready;
 use log::{debug, trace};
-use tokio::net::{lookup_host, ToSocketAddrs, UdpSocket};
+use tokio::{
+    io::ReadBuf,
+    net::{lookup_host, ToSocketAddrs, UdpSocket},
+};
 
 use crate::{
     error::*,
@@ -114,6 +117,22 @@ impl UtpSocket {
             self.local_addr, remote_addr, packet.packet_type, bytes_read
         );
         Ok((packet, remote_addr))
+    }
+
+    // TODO: We'll need this for an implenentation of poll_get_packet
+    fn poll_recv_from(&self, cx: &mut Context) -> Poll<Result<(Packet, SocketAddr)>> {
+        let mut buf = [0; MAX_DATAGRAM_SIZE];
+        let mut buf = ReadBuf::new(&mut buf);
+        let remote_addr = ready!(self.socket.poll_recv_from(cx, &mut buf))?;
+        let packet = Packet::try_from(Bytes::copy_from_slice(buf.filled()))?;
+        debug!(
+            "{} <- {} {:?} ({} bytes)",
+            self.local_addr,
+            remote_addr,
+            packet.packet_type,
+            buf.filled().len()
+        );
+        Poll::Ready(Ok((packet, remote_addr)))
     }
 
     fn route_packet(&self, packet: Packet, remote_addr: SocketAddr) {

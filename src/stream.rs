@@ -8,7 +8,7 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
-use futures_util::io::AsyncWrite;
+use futures_util::io::{AsyncRead, AsyncWrite};
 use log::debug;
 use tokio::net::{lookup_host, ToSocketAddrs};
 
@@ -99,6 +99,10 @@ impl UtpStream {
         Ok(())
     }
 
+    fn poll_read_priv(&mut self, _cx: &mut Context, _buf: &mut [u8]) -> Poll<io::Result<usize>> {
+        todo!()
+    }
+
     fn poll_write_priv(&mut self, _cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
         let mut outbound_chunks = self.outbound_chunks.write().unwrap();
         // TODO: Don't copy each chunk, use Bytes::split_to to get the bytes for each packet
@@ -149,6 +153,16 @@ impl fmt::Debug for UtpStream {
             self.socket.local_addr(),
             self.remote_addr
         ))
+    }
+}
+
+impl AsyncRead for UtpStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        self.poll_read_priv(cx, buf)
     }
 }
 
