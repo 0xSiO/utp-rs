@@ -24,7 +24,7 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use futures_util::future::join_all;
+    use futures_util::stream::{FuturesUnordered, StreamExt, TryStreamExt};
     use log::*;
     use tokio::io::AsyncWriteExt;
 
@@ -69,16 +69,13 @@ mod tests {
         // TODO: 279 simultaneous connections seems to stall the test. Figure out why
         const MAX_CONNS: u16 = 278;
 
-        let local_conns: Vec<UtpStream> = join_all((0..MAX_CONNS).into_iter().map(|_: u16| {
-            tokio::spawn(UtpStream::connect(
-                Arc::clone(&local_socket),
-                remote_socket.local_addr(),
-            ))
-        }))
-        .await
-        .into_iter()
-        .map(|result| result.unwrap().unwrap())
-        .collect();
+        let conns: Result<Vec<UtpStream>, _> = (0..MAX_CONNS)
+            .into_iter()
+            .map(|_: u16| UtpStream::connect(Arc::clone(&local_socket), remote_socket.local_addr()))
+            .collect::<FuturesUnordered<_>>()
+            .try_collect()
+            .await;
+        let local_conns = conns.unwrap();
 
         #[rustfmt::skip]
         let packets: Vec<Packet> = (0..MAX_CONNS).into_iter().map(|i| {
@@ -86,26 +83,34 @@ mod tests {
                         20, 0, 30, 1, 0, vec![], Bytes::new())
         }).collect();
 
-        let send_task = join_all((0..MAX_CONNS).into_iter().map(|i: u16| {
-            let remote_socket = Arc::clone(&remote_socket);
-            let local_addr = local_socket.local_addr();
-            let packet = packets[i as usize].clone();
-            tokio::spawn(async move {
-                let result = remote_socket.send_to(packet, local_addr).await;
-                assert!(result.unwrap() > 0);
+        let send_tasks = (0..MAX_CONNS)
+            .into_iter()
+            .map(|i: u16| {
+                let remote_socket = Arc::clone(&remote_socket);
+                let local_addr = local_socket.local_addr();
+                let packet = packets[i as usize].clone();
+                async move {
+                    let result = remote_socket.send_to(packet, local_addr).await;
+                    if result.unwrap() != 20 {
+                        error!("Didn't send 20 bytes");
+                    }
+                }
             })
-        }));
+            .collect::<FuturesUnordered<_>>();
 
-        let recv_task = join_all(local_conns.into_iter().map(|conn| {
-            tokio::spawn(async move {
+        let recv_tasks = local_conns
+            .into_iter()
+            .map(|conn| async move {
                 match conn.recv().await {
                     Ok(result) => assert_eq!(result, ()),
                     Err(err) => error!("{}", err),
                 }
             })
-        }));
+            .collect::<FuturesUnordered<_>>();
 
-        let _ = tokio::join!(send_task, recv_task);
+        let send_handle = tokio::spawn(send_tasks.collect::<Vec<_>>());
+        let recv_handle = tokio::spawn(recv_tasks.collect::<Vec<_>>());
+        let _ = tokio::join!(send_handle, recv_handle);
     }
 
     #[tokio::test]

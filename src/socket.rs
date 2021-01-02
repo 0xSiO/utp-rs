@@ -79,8 +79,8 @@ impl UtpSocket {
             .next()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, Error::MissingAddress))?;
         debug!(
-            "{} -> {} {:?}",
-            self.local_addr, remote_addr, packet.packet_type
+            "Conn #{}: {} -> {} {:?}",
+            packet.connection_id, self.local_addr, remote_addr, packet.packet_type
         );
         Ok(self
             .socket
@@ -99,8 +99,8 @@ impl UtpSocket {
         let datagram = Bytes::from(packet.clone());
         let bytes_written = ready!(self.socket.poll_send_to(cx, &datagram, remote_addr))?;
         debug!(
-            "{} -> {} {:?} ({} bytes)",
-            self.local_addr, remote_addr, packet.packet_type, bytes_written
+            "Conn #{}: {} -> {} {:?} ({} bytes)",
+            packet.connection_id, self.local_addr, remote_addr, packet.packet_type, bytes_written
         );
         debug_assert_eq!(bytes_written, datagram.len());
         Poll::Ready(Ok(bytes_written))
@@ -113,8 +113,8 @@ impl UtpSocket {
         buf.truncate(bytes_read);
         let packet = Packet::try_from(buf.freeze())?;
         debug!(
-            "{} <- {} {:?} ({} bytes)",
-            self.local_addr, remote_addr, packet.packet_type, bytes_read
+            "Conn #{}: {} <- {} {:?} ({} bytes)",
+            packet.connection_id, self.local_addr, remote_addr, packet.packet_type, bytes_read
         );
         Ok((packet, remote_addr))
     }
@@ -126,7 +126,8 @@ impl UtpSocket {
         let remote_addr = ready!(self.socket.poll_recv_from(cx, &mut buf))?;
         let packet = Packet::try_from(Bytes::copy_from_slice(buf.filled()))?;
         debug!(
-            "{} <- {} {:?} ({} bytes)",
+            "Conn #{}: {} <- {} {:?} ({} bytes)",
+            packet.connection_id,
             self.local_addr,
             remote_addr,
             packet.packet_type,
