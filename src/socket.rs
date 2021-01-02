@@ -9,7 +9,7 @@ use std::{
 
 use bytes::{Bytes, BytesMut};
 use crossbeam_queue::SegQueue;
-use futures_util::ready;
+use futures_core::ready;
 use log::{debug, trace};
 use tokio::{
     io::ReadBuf,

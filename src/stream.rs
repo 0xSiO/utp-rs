@@ -8,9 +8,11 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
-use futures_util::io::{AsyncRead, AsyncWrite};
 use log::debug;
-use tokio::net::{lookup_host, ToSocketAddrs};
+use tokio::{
+    io::{AsyncRead, AsyncWrite, ReadBuf},
+    net::{lookup_host, ToSocketAddrs},
+};
 
 use crate::{
     error::*,
@@ -99,7 +101,7 @@ impl UtpStream {
         Ok(())
     }
 
-    fn poll_read_priv(&mut self, _cx: &mut Context, _buf: &mut [u8]) -> Poll<io::Result<usize>> {
+    fn poll_read_priv(&mut self, _cx: &mut Context, _buf: &mut ReadBuf) -> Poll<io::Result<()>> {
         todo!()
     }
 
@@ -160,8 +162,8 @@ impl AsyncRead for UtpStream {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
+        buf: &mut ReadBuf,
+    ) -> Poll<io::Result<()>> {
         self.poll_read_priv(cx, buf)
     }
 }
@@ -179,7 +181,7 @@ impl AsyncWrite for UtpStream {
         self.poll_flush_priv(cx)
     }
 
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
         // TODO: We could set a shutdown flag on UtpStream and return Ok(0) for any future calls to
         //       poll_write, effectively preventing any more packets from being sent
         self.poll_flush(cx)

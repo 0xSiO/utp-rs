@@ -24,8 +24,9 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use futures_util::{future::join_all, io::AsyncWriteExt};
+    use futures_util::future::join_all;
     use log::*;
+    use tokio::io::AsyncWriteExt;
 
     use super::*;
     use packet::{Packet, PacketType};
