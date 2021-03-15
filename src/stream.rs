@@ -101,11 +101,11 @@ impl UtpStream {
         Ok(())
     }
 
-    fn poll_read_priv(&mut self, _cx: &mut Context, _buf: &mut ReadBuf) -> Poll<io::Result<()>> {
+    fn poll_read_priv(&mut self, _cx: &mut Context<'_>, _buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
         todo!()
     }
 
-    fn poll_write_priv(&mut self, _cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
+    fn poll_write_priv(&mut self, _cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
         let mut outbound_chunks = self.outbound_chunks.write().unwrap();
         // TODO: Don't copy each chunk, use Bytes::split_to to get the bytes for each packet
         buf.chunks(MAX_DATA_SEGMENT_SIZE).for_each(|chunk| {
@@ -114,7 +114,7 @@ impl UtpStream {
         Poll::Ready(Ok(buf.len()))
     }
 
-    fn poll_flush_priv(&mut self, cx: &mut Context) -> Poll<io::Result<()>> {
+    fn poll_flush_priv(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         while let Some(chunk) = self.outbound_chunks.write().unwrap().pop_front() {
             // TODO: Use actual values for packet fields
             #[rustfmt::skip]
@@ -148,7 +148,7 @@ impl UtpStream {
 }
 
 impl fmt::Debug for UtpStream {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_fmt(format_args!(
             "UtpStream {{ id: {}, local_addr: {}, remote_addr: {} }}",
             self.connection_id,
@@ -161,8 +161,8 @@ impl fmt::Debug for UtpStream {
 impl AsyncRead for UtpStream {
     fn poll_read(
         mut self: Pin<&mut Self>,
-        cx: &mut Context,
-        buf: &mut ReadBuf,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         self.poll_read_priv(cx, buf)
     }
@@ -171,17 +171,17 @@ impl AsyncRead for UtpStream {
 impl AsyncWrite for UtpStream {
     fn poll_write(
         mut self: Pin<&mut Self>,
-        cx: &mut Context,
+        cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         self.poll_write_priv(cx, buf)
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.poll_flush_priv(cx)
     }
 
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         // TODO: We could set a shutdown flag on UtpStream and return Ok(0) for any future calls to
         //       poll_write, effectively preventing any more packets from being sent
         self.poll_flush(cx)

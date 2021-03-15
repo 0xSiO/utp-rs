@@ -92,7 +92,7 @@ impl UtpSocket {
     //       the number of bytes written to the socket will equal the number of bytes in the packet
     pub fn poll_send_to(
         &self,
-        cx: &mut Context,
+        cx: &mut Context<'_>,
         packet: Packet,
         remote_addr: SocketAddr,
     ) -> Poll<io::Result<usize>> {
@@ -120,7 +120,8 @@ impl UtpSocket {
     }
 
     // TODO: We'll need this for an implenentation of poll_get_packet
-    fn poll_recv_from(&self, cx: &mut Context) -> Poll<Result<(Packet, SocketAddr)>> {
+    #[allow(dead_code)]
+    fn poll_recv_from(&self, cx: &mut Context<'_>) -> Poll<Result<(Packet, SocketAddr)>> {
         let mut buf = [0; MAX_DATAGRAM_SIZE];
         let mut buf = ReadBuf::new(&mut buf);
         let remote_addr = ready!(self.socket.poll_recv_from(cx, &mut buf))?;
