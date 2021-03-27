@@ -10,7 +10,7 @@ use std::{
 use bytes::{Bytes, BytesMut};
 use log::debug;
 use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
+    io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf},
     net::{lookup_host, ToSocketAddrs},
 };
 
@@ -32,7 +32,7 @@ pub struct UtpStream {
     // TODO: Track connection state
     outbound_packets: Arc<RwLock<VecDeque<Packet>>>,
     sent_packets: Arc<RwLock<VecDeque<Packet>>>,
-    inbound_packets: Arc<RwLock<VecDeque<Packet>>>,
+    received_packets: Arc<RwLock<VecDeque<Packet>>>,
     received_data: BytesMut,
 }
 
@@ -43,7 +43,7 @@ impl UtpStream {
         remote_addr: SocketAddr,
         outbound_packets: Arc<RwLock<VecDeque<Packet>>>,
         sent_packets: Arc<RwLock<VecDeque<Packet>>>,
-        inbound_packets: Arc<RwLock<VecDeque<Packet>>>,
+        received_packets: Arc<RwLock<VecDeque<Packet>>>,
         received_data: BytesMut,
     ) -> Self {
         Self {
@@ -52,7 +52,7 @@ impl UtpStream {
             remote_addr,
             outbound_packets,
             sent_packets,
-            inbound_packets,
+            received_packets,
             received_data,
         }
     }
@@ -87,7 +87,7 @@ impl UtpStream {
         self.remote_addr
     }
 
-    pub async fn recv(&self) -> Result<()> {
+    pub async fn recv(&mut self) -> Result<()> {
         let packet = self
             .socket
             .get_packet(self.connection_id, self.remote_addr)
@@ -96,8 +96,24 @@ impl UtpStream {
             "connection {} received {:?} from {}",
             self.connection_id, packet.packet_type, self.remote_addr
         );
-        // TODO: Make sure data is added to internal buffer in the correct packet order, right now
-        //       it could be completely out of order depending on how the packets arrive
+
+        // Reply with State if we received a Data
+        match packet.packet_type {
+            PacketType::Data => {
+                // TODO: Use actual values for packet fields
+                #[rustfmt::skip]
+                let ack = Packet::new(PacketType::State, 1, self.connection_id(), 0, 0, 0, 0,
+                                      packet.seq_number, vec![], Bytes::new());
+                self.outbound_packets.write().unwrap().push_back(ack);
+                // TODO: This will send all packets waiting in the outbound buffer. Is this the
+                //       behavior we want?
+                self.flush().await?;
+            }
+            _ => {}
+        }
+
+        self.received_packets.write().unwrap().push_back(packet);
+
         Ok(())
     }
 

@@ -102,7 +102,7 @@ mod tests {
 
         let recv_tasks = local_conns
             .into_iter()
-            .map(|conn| async move {
+            .map(|mut conn| async move {
                 match conn.recv().await {
                     Ok(result) => assert_eq!(result, ()),
                     Err(err) => error!("{}", err),
@@ -147,5 +147,32 @@ mod tests {
         }
         assert_eq!(result.len(), large_message.len());
         assert_eq!(result, large_message);
+    }
+
+    #[tokio::test]
+    async fn ack_test() {
+        init_logger();
+
+        let local_socket = Arc::new(get_socket().await);
+        let remote_socket = Arc::new(get_socket().await);
+
+        let local_addr = local_socket.local_addr();
+        let remote_addr = remote_socket.local_addr();
+
+        // Send some data to the remote socket
+        let mut stream_1 = UtpStream::connect(Arc::clone(&local_socket), remote_addr)
+            .await
+            .unwrap();
+        let message = &[1_u8; crate::stream::MAX_DATA_SEGMENT_SIZE];
+        stream_1.write_all(message).await.unwrap();
+        stream_1.flush().await.unwrap();
+
+        // Check that we successfully received data on the remote socket
+        let mut stream_2 = UtpStream::connect(remote_socket, local_addr).await.unwrap();
+        assert!(stream_2.recv().await.is_ok());
+
+        // Check that the remote socket sent us back a State packet
+        let (packet, _) = local_socket.recv_from().await.unwrap();
+        assert_eq!(packet.packet_type, PacketType::State);
     }
 }
