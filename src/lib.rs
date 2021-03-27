@@ -179,7 +179,8 @@ mod tests {
         assert!(stream_2.recv().await.is_ok());
 
         // Check that the remote socket sent us back a State packet
-        let (packet, _) = local_socket.recv_from().await.unwrap();
+        let (packet, addr) = local_socket.recv_from().await.unwrap();
+        assert_eq!(addr, remote_addr);
         assert_eq!(packet.packet_type, PacketType::State);
     }
 }
