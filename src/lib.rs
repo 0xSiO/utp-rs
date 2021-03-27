@@ -127,25 +127,32 @@ mod tests {
 
         let mut stream = UtpStream::connect(local_socket, remote_addr).await.unwrap();
 
+        // Send 1 packet of data to the remote socket
         let message = &[1_u8; crate::stream::MAX_DATA_SEGMENT_SIZE];
         stream.write_all(message).await.unwrap();
         stream.flush().await.unwrap();
+
+        // Check that we received a packet on the remote socket
         let (packet, addr) = remote_socket.recv_from().await.unwrap();
         assert_eq!(packet.data.len(), message.len());
         assert_eq!(packet.data.as_ref(), message);
         assert_eq!(addr, local_addr);
 
+        // Send a larger message that should break into several packets
         const NUM_PACKETS: usize = 4;
         let large_message = &[1_u8; crate::stream::MAX_DATA_SEGMENT_SIZE * NUM_PACKETS];
         stream.write_all(large_message).await.unwrap();
         stream.flush().await.unwrap();
 
+        // Check that all the data made it to the remote socket
         let mut result: Vec<u8> = Vec::with_capacity(large_message.len());
         for _ in 0..NUM_PACKETS {
             let (packet, _) = remote_socket.recv_from().await.unwrap();
             result.extend(packet.data);
         }
         assert_eq!(result.len(), large_message.len());
+        // TODO: This could fail if the packets arrive out of order. Move this check to a dedicated
+        //       test instead after implementing packet re-ordering
         assert_eq!(result, large_message);
     }
 
