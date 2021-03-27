@@ -68,8 +68,8 @@ mod tests {
         let local_socket = Arc::new(get_socket().await);
         let remote_socket = Arc::new(get_socket().await);
 
-        // TODO: 279 simultaneous connections seems to stall the test. Figure out why
-        const MAX_CONNS: u16 = 278;
+        // Make this smaller if your operating system doesn't have large enough socket buffers
+        const MAX_CONNS: u16 = 250;
 
         let conns: Result<Vec<UtpStream>, _> = (0..MAX_CONNS)
             .into_iter()
