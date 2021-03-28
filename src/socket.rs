@@ -199,53 +199,6 @@ impl UtpSocket {
         Ok(connection_id)
     }
 
-    pub(crate) fn poll_get_packet(
-        &self,
-        cx: &mut Context<'_>,
-        connection_id: u16,
-        remote_addr: SocketAddr,
-    ) -> Poll<Option<Result<Packet>>> {
-        if let Some(queue) = self
-            .packet_queues
-            .read()
-            .unwrap()
-            .get(&(connection_id, remote_addr))
-        {
-            if let Some(packet) = queue.pop() {
-                debug!("conn {} got queued packet", connection_id);
-                return Poll::Ready(Some(Ok(packet)));
-            }
-        } else {
-            // TODO: Simplify this if statement if the else branch is never called
-            unreachable!();
-        }
-
-        debug!("conn {} polling socket", connection_id);
-        if let Poll::Ready(result) = self.poll_recv_from(cx) {
-            let (packet, actual_addr) = result?;
-
-            if let PacketType::Syn = packet.packet_type {
-                self.syn_packets.push((packet, actual_addr));
-            } else {
-                if (packet.connection_id, actual_addr) == (connection_id, remote_addr) {
-                    debug!("conn {} got packet from socket", connection_id);
-                    return Poll::Ready(Some(Ok(packet)));
-                } else {
-                    debug!(
-                        "conn {} routing packet to conn {}",
-                        connection_id, packet.connection_id
-                    );
-                    self.route_packet(packet, actual_addr);
-                    debug!("packet routed");
-                }
-            }
-        }
-
-        // Didn't get a packet, so schedule to be polled again
-        cx.waker().wake_by_ref();
-        return Poll::Pending;
-    }
-
     pub(crate) fn packets(
         &self,
         connection_id: u16,
@@ -287,11 +240,55 @@ struct PacketStream<'s> {
     remote_addr: SocketAddr,
 }
 
+impl<'s> PacketStream<'s> {
+    fn poll_next_priv(&self, cx: &mut Context<'_>) -> Poll<Option<Result<Packet>>> {
+        if let Some(queue) = self
+            .socket
+            .packet_queues
+            .read()
+            .unwrap()
+            .get(&(self.connection_id, self.remote_addr))
+        {
+            if let Some(packet) = queue.pop() {
+                debug!("conn {} got queued packet", self.connection_id);
+                return Poll::Ready(Some(Ok(packet)));
+            }
+        } else {
+            // TODO: Simplify this if statement if the else branch is never called
+            unreachable!();
+        }
+
+        debug!("conn {} polling socket", self.connection_id);
+        if let Poll::Ready(result) = self.socket.poll_recv_from(cx) {
+            let (packet, actual_addr) = result?;
+
+            if let PacketType::Syn = packet.packet_type {
+                self.socket.syn_packets.push((packet, actual_addr));
+            } else {
+                if (packet.connection_id, actual_addr) == (self.connection_id, self.remote_addr) {
+                    debug!("conn {} got packet from socket", self.connection_id);
+                    return Poll::Ready(Some(Ok(packet)));
+                } else {
+                    debug!(
+                        "conn {} routing packet to conn {}",
+                        self.connection_id, packet.connection_id
+                    );
+                    self.socket.route_packet(packet, actual_addr);
+                    debug!("packet routed");
+                }
+            }
+        }
+
+        // Didn't get a packet, so schedule to be polled again
+        cx.waker().wake_by_ref();
+        return Poll::Pending;
+    }
+}
+
 impl<'s> Stream for PacketStream<'s> {
     type Item = Result<Packet>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.socket
-            .poll_get_packet(cx, self.connection_id, self.remote_addr)
+        self.poll_next_priv(cx)
     }
 }

@@ -37,12 +37,8 @@ mod tests {
         let _ = pretty_env_logger::try_init();
     }
 
-    async fn get_socket() -> UtpSocket {
-        UtpSocket::bind("localhost:0").await.unwrap()
-    }
-
-    async fn get_listener() -> UtpListener {
-        UtpListener::bind("localhost:0").await.unwrap()
+    async fn get_socket() -> Arc<UtpSocket> {
+        Arc::new(UtpSocket::bind("localhost:0").await.unwrap())
     }
 
     async fn get_connection_pair(
@@ -64,8 +60,8 @@ mod tests {
     async fn basic_connection_test() {
         init_logger();
 
-        let socket_1 = Arc::new(get_socket().await);
-        let socket_2 = Arc::new(get_socket().await);
+        let socket_1 = get_socket().await;
+        let socket_2 = get_socket().await;
         let (conn_1, conn_2) = get_connection_pair(socket_1, socket_2).await;
 
         assert_eq!(conn_1.connection_id_send(), conn_2.connection_id_recv());
@@ -76,8 +72,8 @@ mod tests {
     async fn routing_test() {
         init_logger();
 
-        let local_socket = Arc::new(get_socket().await);
-        let remote_socket = Arc::new(get_socket().await);
+        let local_socket = get_socket().await;
+        let remote_socket = get_socket().await;
 
         // Make this smaller if your operating system doesn't have large enough socket buffers
         const MAX_CONNS: usize = 250;
@@ -140,8 +136,8 @@ mod tests {
     async fn async_write_test() {
         init_logger();
 
-        let local_socket = Arc::new(get_socket().await);
-        let remote_socket = Arc::new(get_socket().await);
+        let local_socket = get_socket().await;
+        let remote_socket = get_socket().await;
 
         let (mut stream_1, _) =
             get_connection_pair(Arc::clone(&local_socket), Arc::clone(&remote_socket)).await;
@@ -179,8 +175,8 @@ mod tests {
     async fn ack_test() {
         init_logger();
 
-        let local_socket = Arc::new(get_socket().await);
-        let remote_socket = Arc::new(get_socket().await);
+        let local_socket = get_socket().await;
+        let remote_socket = get_socket().await;
 
         let (mut stream_1, mut stream_2) =
             get_connection_pair(Arc::clone(&local_socket), Arc::clone(&remote_socket)).await;
