@@ -272,6 +272,9 @@ impl<'s> PacketStream<'s> {
         }
 
         // Didn't get a packet, so schedule to be polled again
+        // TODO: If this results in high CPU usage, consider re-thinking this packet stream
+        //       architecture. Maybe use a single task to poll the socket and wait for data using
+        //       channels.
         cx.waker().wake_by_ref();
         return Poll::Pending;
     }
