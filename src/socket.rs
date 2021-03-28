@@ -205,36 +205,26 @@ impl UtpSocket {
         connection_id: u16,
         remote_addr: SocketAddr,
     ) -> Poll<Option<Result<Packet>>> {
-        loop {
-            if let Some(queue) = self
-                .packet_queues
-                .read()
-                .unwrap()
-                .get(&(connection_id, remote_addr))
-            {
-                if let Some(packet) = queue.pop() {
-                    debug!("conn {} got queued packet", connection_id);
-                    return Poll::Ready(Some(Ok(packet)));
-                }
-            } else {
-                // TODO: Simplify this if statement if the else branch is never called
-                unreachable!();
+        if let Some(queue) = self
+            .packet_queues
+            .read()
+            .unwrap()
+            .get(&(connection_id, remote_addr))
+        {
+            if let Some(packet) = queue.pop() {
+                debug!("conn {} got queued packet", connection_id);
+                return Poll::Ready(Some(Ok(packet)));
             }
+        } else {
+            // TODO: Simplify this if statement if the else branch is never called
+            unreachable!();
+        }
 
-            debug!("conn {} polling socket", connection_id);
-            let (packet, actual_addr) = match self.poll_recv_from(cx) {
-                Poll::Ready(result) => result?,
-                // If the socket isn't ready, reschedule this task to be polled later
-                Poll::Pending => {
-                    // TODO: This works, but seems to immediately reschedule the task instead of
-                    //       pushing it to the back of the queue
-                    cx.waker().wake_by_ref();
-                    return Poll::Pending;
-                }
-            };
+        debug!("conn {} polling socket", connection_id);
+        if let Poll::Ready(result) = self.poll_recv_from(cx) {
+            let (packet, actual_addr) = result?;
 
             if let PacketType::Syn = packet.packet_type {
-                debug!("conn {} got SYN from socket", connection_id);
                 self.syn_packets.push((packet, actual_addr));
             } else {
                 if (packet.connection_id, actual_addr) == (connection_id, remote_addr) {
@@ -250,6 +240,10 @@ impl UtpSocket {
                 }
             }
         }
+
+        // Didn't get a packet, so schedule to be polled again
+        cx.waker().wake_by_ref();
+        return Poll::Pending;
     }
 
     pub(crate) fn packets(
