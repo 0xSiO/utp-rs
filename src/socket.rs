@@ -206,7 +206,6 @@ impl UtpSocket {
         remote_addr: SocketAddr,
     ) -> Poll<Option<Result<Packet>>> {
         loop {
-            debug!("conn {} checking queue", connection_id);
             if let Some(queue) = self
                 .packet_queues
                 .read()
@@ -223,8 +222,16 @@ impl UtpSocket {
             }
 
             debug!("conn {} polling socket", connection_id);
-            let (packet, actual_addr) = ready!(self.poll_recv_from(cx))?;
-            debug!("conn {} done polling socket", connection_id);
+            let (packet, actual_addr) = match self.poll_recv_from(cx) {
+                Poll::Ready(result) => result?,
+                // If the socket isn't ready, reschedule this task to be polled later
+                Poll::Pending => {
+                    // TODO: This works, but seems to immediately reschedule the task instead of
+                    //       pushing it to the back of the queue
+                    cx.waker().wake_by_ref();
+                    return Poll::Pending;
+                }
+            };
 
             if let PacketType::Syn = packet.packet_type {
                 debug!("conn {} got SYN from socket", connection_id);

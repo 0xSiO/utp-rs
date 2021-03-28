@@ -72,8 +72,6 @@ mod tests {
         assert_eq!(conn_1.connection_id_recv(), conn_2.connection_id_send());
     }
 
-    // TODO: This is getting stuck on poll_get_packet. See documentation for
-    // UdpSocket::poll_recv_from for more details on how tasks are scheduled to be woken up
     #[tokio::test]
     async fn routing_test() {
         init_logger();
