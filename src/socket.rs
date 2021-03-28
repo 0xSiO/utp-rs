@@ -217,6 +217,8 @@ impl UtpSocket {
                 }
             }
 
+            // TODO: Tasks will get stuck here waiting for packets even if one shows up in the
+            //       queue. Need to use a poll-based approach that checks the queue every time
             let (packet, actual_addr) = self.recv_from().await?;
             if let PacketType::Syn = packet.packet_type {
                 self.syn_packets.push((packet, actual_addr));

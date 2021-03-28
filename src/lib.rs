@@ -72,6 +72,8 @@ mod tests {
         assert_eq!(conn_1.connection_id_recv(), conn_2.connection_id_send());
     }
 
+    // TODO: This test will hang due to an issue in UtpSocket::get_packet. See the comment in that
+    //       function for more details
     #[tokio::test]
     async fn routing_test() {
         init_logger();
@@ -80,10 +82,10 @@ mod tests {
         let remote_socket = Arc::new(get_socket().await);
 
         // Make this smaller if your operating system doesn't have large enough socket buffers
-        const MAX_CONNS: usize = 2;
+        const MAX_CONNS: usize = 250;
 
         let local_conns = (0..MAX_CONNS)
-            .map(|i| {
+            .map(|_| {
                 let local_socket = Arc::clone(&local_socket);
                 let remote_socket = Arc::clone(&remote_socket);
                 // Just grab the first connection in the pair since we'll be checking it later
