@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 bytes = "1.0.1"
 crossbeam-queue = "0.3.1"
-futures-core = "0.3.13"
+futures-util = "0.3.13"
 log = "0.4.14"
 thiserror = "1.0.24"
 tokio = { version = "1.4.0", features = ["net"] }

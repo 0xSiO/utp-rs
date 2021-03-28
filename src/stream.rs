@@ -8,6 +8,7 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
+use futures_util::stream::TryStreamExt;
 use log::debug;
 use tokio::{
     io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf},
@@ -85,7 +86,18 @@ impl UtpStream {
 
         // state: SYN sent
 
-        let response_packet = socket.get_packet(connection_id_recv, remote_addr).await?;
+        // TODO: Handle this more gracefully
+        let response_packet = socket
+            .packets(connection_id_recv, remote_addr)
+            .try_next()
+            .await?
+            .unwrap();
+
+        debug!(
+            "conn {} ACKed conn {}'s SYN",
+            connection_id_send, connection_id_recv
+        );
+
         match response_packet.packet_type {
             PacketType::State => {
                 // state: connected
@@ -124,10 +136,14 @@ impl UtpStream {
     }
 
     pub async fn recv(&mut self) -> Result<()> {
+        // TODO: Handle this more gracefully
         let packet = self
             .socket
-            .get_packet(self.connection_id_recv, self.remote_addr)
-            .await?;
+            .packets(self.connection_id_recv, self.remote_addr)
+            .try_next()
+            .await?
+            .unwrap();
+
         debug!(
             "connection {} received {:?} from {}",
             self.connection_id_recv, packet.packet_type, self.remote_addr

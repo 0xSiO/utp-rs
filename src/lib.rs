@@ -26,7 +26,7 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use futures_util::stream::{FuturesUnordered, StreamExt};
+    use futures_util::{stream::FuturesUnordered, StreamExt, TryStreamExt};
     use log::*;
     use tokio::io::AsyncWriteExt;
 
@@ -72,8 +72,8 @@ mod tests {
         assert_eq!(conn_1.connection_id_recv(), conn_2.connection_id_send());
     }
 
-    // TODO: This test will hang due to an issue in UtpSocket::get_packet. See the comment in that
-    //       function for more details
+    // TODO: This is getting stuck on poll_get_packet. See documentation for
+    // UdpSocket::poll_recv_from for more details on how tasks are scheduled to be woken up
     #[tokio::test]
     async fn routing_test() {
         init_logger();
@@ -123,8 +123,10 @@ mod tests {
                 let remote_socket = Arc::clone(&remote_socket);
                 async move {
                     let packet = local_socket
-                        .get_packet(conn.connection_id_recv(), remote_socket.local_addr())
+                        .packets(conn.connection_id_recv(), remote_socket.local_addr())
+                        .try_next()
                         .await
+                        .unwrap()
                         .unwrap();
                     assert_eq!(packet.connection_id, conn.connection_id_recv());
                 }

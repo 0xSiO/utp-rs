@@ -3,13 +3,14 @@ use std::{
     convert::TryFrom,
     io,
     net::SocketAddr,
+    pin::Pin,
     sync::RwLock,
     task::{Context, Poll},
 };
 
 use bytes::{Bytes, BytesMut};
 use crossbeam_queue::SegQueue;
-use futures_core::ready;
+use futures_util::{ready, stream::Stream};
 use log::{debug, trace};
 use tokio::{
     io::ReadBuf,
@@ -120,8 +121,6 @@ impl UtpSocket {
         Ok((packet, remote_addr))
     }
 
-    // TODO: We'll need this for an implenentation of poll_get_packet
-    #[allow(dead_code)]
     fn poll_recv_from(&self, cx: &mut Context<'_>) -> Poll<Result<(Packet, SocketAddr)>> {
         let mut buf = [0; MAX_DATAGRAM_SIZE];
         let mut buf = ReadBuf::new(&mut buf);
@@ -200,12 +199,14 @@ impl UtpSocket {
         Ok(connection_id)
     }
 
-    pub(crate) async fn get_packet(
+    pub(crate) fn poll_get_packet(
         &self,
+        cx: &mut Context<'_>,
         connection_id: u16,
         remote_addr: SocketAddr,
-    ) -> Result<Packet> {
+    ) -> Poll<Option<Result<Packet>>> {
         loop {
+            debug!("conn {} checking queue", connection_id);
             if let Some(queue) = self
                 .packet_queues
                 .read()
@@ -213,28 +214,46 @@ impl UtpSocket {
                 .get(&(connection_id, remote_addr))
             {
                 if let Some(packet) = queue.pop() {
-                    return Ok(packet);
+                    debug!("conn {} got queued packet", connection_id);
+                    return Poll::Ready(Some(Ok(packet)));
                 }
+            } else {
+                // TODO: Simplify this if statement if the else branch is never called
+                unreachable!();
             }
 
-            // TODO: Tasks will get stuck here waiting for packets even if one shows up in the
-            //       queue. Need to use a poll-based approach that checks the queue every time
-            let (packet, actual_addr) = self.recv_from().await?;
+            debug!("conn {} polling socket", connection_id);
+            let (packet, actual_addr) = ready!(self.poll_recv_from(cx))?;
+            debug!("conn {} done polling socket", connection_id);
+
             if let PacketType::Syn = packet.packet_type {
+                debug!("conn {} got SYN from socket", connection_id);
                 self.syn_packets.push((packet, actual_addr));
             } else {
-                if packet.connection_id == connection_id {
-                    if actual_addr == remote_addr {
-                        return Ok(packet);
-                    }
-                    debug!(
-                        "connection {} expected packet from {}, got one from {}",
-                        connection_id, remote_addr, actual_addr
-                    );
+                if (packet.connection_id, actual_addr) == (connection_id, remote_addr) {
+                    debug!("conn {} got packet from socket", connection_id);
+                    return Poll::Ready(Some(Ok(packet)));
                 } else {
+                    debug!(
+                        "conn {} routing packet to conn {}",
+                        connection_id, packet.connection_id
+                    );
                     self.route_packet(packet, actual_addr);
+                    debug!("packet routed");
                 }
             }
+        }
+    }
+
+    pub(crate) fn packets(
+        &self,
+        connection_id: u16,
+        remote_addr: SocketAddr,
+    ) -> impl Stream<Item = Result<Packet>> + '_ {
+        PacketStream {
+            socket: self,
+            connection_id,
+            remote_addr,
         }
     }
 }
@@ -258,5 +277,20 @@ impl TryFrom<std::net::UdpSocket> for UtpSocket {
 
     fn try_from(socket: std::net::UdpSocket) -> Result<Self> {
         Self::try_from(UdpSocket::try_from(socket)?)
+    }
+}
+
+struct PacketStream<'s> {
+    socket: &'s UtpSocket,
+    connection_id: u16,
+    remote_addr: SocketAddr,
+}
+
+impl<'s> Stream for PacketStream<'s> {
+    type Item = Result<Packet>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.socket
+            .poll_get_packet(cx, self.connection_id, self.remote_addr)
     }
 }
