@@ -26,7 +26,7 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use futures_util::stream::{FuturesUnordered, StreamExt, TryStreamExt};
+    use futures_util::stream::{FuturesUnordered, StreamExt};
     use log::*;
     use tokio::io::AsyncWriteExt;
 
@@ -45,20 +45,31 @@ mod tests {
         UtpListener::bind("localhost:0").await.unwrap()
     }
 
+    async fn get_connection_pair(
+        socket_1: Arc<UtpSocket>,
+        socket_2: Arc<UtpSocket>,
+    ) -> (UtpStream, UtpStream) {
+        let listener = UtpListener::new(Arc::clone(&socket_2));
+        let conn_1 = tokio::spawn(async move {
+            UtpStream::connect(socket_1, socket_2.local_addr())
+                .await
+                .unwrap()
+        });
+        let conn_2 = tokio::spawn(async move { listener.accept().await.unwrap() });
+        let (conn_1, conn_2) = tokio::join!(conn_1, conn_2);
+        (conn_1.unwrap(), conn_2.unwrap())
+    }
+
     #[tokio::test]
     async fn basic_connection_test() {
         init_logger();
 
-        let listener = get_listener().await;
+        let socket_1 = Arc::new(get_socket().await);
+        let socket_2 = Arc::new(get_socket().await);
+        let (conn_1, conn_2) = get_connection_pair(socket_1, socket_2).await;
 
-        #[rustfmt::skip]
-        let syn = Packet::new(PacketType::Syn, 1, 10, 20, 0, 30, 1, 0, vec![], Bytes::new());
-        let socket = get_socket().await;
-        socket.send_to(syn, listener.local_addr()).await.unwrap();
-
-        let conn = listener.accept().await.unwrap();
-        assert_eq!(conn.local_addr(), listener.local_addr());
-        assert_eq!(conn.remote_addr(), socket.local_addr());
+        assert_eq!(conn_1.connection_id_send(), conn_2.connection_id_recv());
+        assert_eq!(conn_1.connection_id_recv(), conn_2.connection_id_send());
     }
 
     #[tokio::test]
@@ -69,30 +80,33 @@ mod tests {
         let remote_socket = Arc::new(get_socket().await);
 
         // Make this smaller if your operating system doesn't have large enough socket buffers
-        const MAX_CONNS: u16 = 250;
+        const MAX_CONNS: usize = 2;
 
-        let conns: Result<Vec<UtpStream>, _> = (0..MAX_CONNS)
-            .into_iter()
-            .map(|_: u16| UtpStream::connect(Arc::clone(&local_socket), remote_socket.local_addr()))
+        let local_conns = (0..MAX_CONNS)
+            .map(|i| {
+                let local_socket = Arc::clone(&local_socket);
+                let remote_socket = Arc::clone(&remote_socket);
+                // Just grab the first connection in the pair since we'll be checking it later
+                async move { get_connection_pair(local_socket, remote_socket).await.0 }
+            })
             .collect::<FuturesUnordered<_>>()
-            .try_collect()
+            .collect::<Vec<UtpStream>>()
             .await;
-        let local_conns = conns.unwrap();
-
-        #[rustfmt::skip]
-        let packets: Vec<Packet> = (0..MAX_CONNS).into_iter().map(|i| {
-            Packet::new(PacketType::State, 1, local_conns[i as usize].connection_id(),
-                        20, 0, 30, 1, 0, vec![], Bytes::new())
-        }).collect();
 
         let send_tasks = (0..MAX_CONNS)
-            .into_iter()
-            .map(|i: u16| {
+            .map(|i| {
                 let remote_socket = Arc::clone(&remote_socket);
                 let local_addr = local_socket.local_addr();
-                let packet = packets[i as usize].clone();
+                let connection_id_recv = local_conns[i].connection_id_recv();
                 async move {
-                    let result = remote_socket.send_to(packet, local_addr).await;
+                    #[rustfmt::skip]
+                    let result = remote_socket
+                        .send_to(
+                            Packet::new(PacketType::State, 1, connection_id_recv, 20, 0, 30,
+                                        1, 0, vec![], Bytes::new()),
+                            local_addr,
+                        )
+                        .await;
                     if result.unwrap() != 20 {
                         error!("Didn't send 20 bytes");
                     }
@@ -102,10 +116,15 @@ mod tests {
 
         let recv_tasks = local_conns
             .into_iter()
-            .map(|mut conn| async move {
-                match conn.recv().await {
-                    Ok(result) => assert_eq!(result, ()),
-                    Err(err) => error!("{}", err),
+            .map(|conn| {
+                let local_socket = Arc::clone(&local_socket);
+                let remote_socket = Arc::clone(&remote_socket);
+                async move {
+                    let packet = local_socket
+                        .get_packet(conn.connection_id_recv(), remote_socket.local_addr())
+                        .await
+                        .unwrap();
+                    assert_eq!(packet.connection_id, conn.connection_id_recv());
                 }
             })
             .collect::<FuturesUnordered<_>>();
@@ -166,10 +185,11 @@ mod tests {
         let local_addr = local_socket.local_addr();
         let remote_addr = remote_socket.local_addr();
 
-        // Send some data to the remote socket
         let mut stream_1 = UtpStream::connect(Arc::clone(&local_socket), remote_addr)
             .await
             .unwrap();
+
+        // Send some data to the remote socket
         let message = &[1_u8; crate::stream::MAX_DATA_SEGMENT_SIZE];
         stream_1.write_all(message).await.unwrap();
         stream_1.flush().await.unwrap();

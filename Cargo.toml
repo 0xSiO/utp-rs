@@ -12,6 +12,7 @@ futures-core = "0.3.13"
 log = "0.4.14"
 thiserror = "1.0.24"
 tokio = { version = "1.4.0", features = ["net"] }
+rand = "0.8.3"
 
 [dev-dependencies]
 futures-util = { version = "0.3.13" }

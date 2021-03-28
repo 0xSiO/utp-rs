@@ -27,9 +27,12 @@ pub(crate) const MAX_DATA_SEGMENT_SIZE: usize =
 #[allow(dead_code)]
 pub struct UtpStream {
     socket: Arc<UtpSocket>,
-    connection_id: u16,
+    connection_id_recv: u16,
+    connection_id_send: u16,
     remote_addr: SocketAddr,
     // TODO: Track connection state
+    seq_number: u16,
+    ack_number: u16,
     outbound_packets: Arc<RwLock<VecDeque<Packet>>>,
     sent_packets: Arc<RwLock<VecDeque<Packet>>>,
     received_packets: Arc<RwLock<VecDeque<Packet>>>,
@@ -39,8 +42,11 @@ pub struct UtpStream {
 impl UtpStream {
     pub(crate) fn new(
         socket: Arc<UtpSocket>,
-        connection_id: u16,
+        connection_id_recv: u16,
+        connection_id_send: u16,
         remote_addr: SocketAddr,
+        seq_number: u16,
+        ack_number: u16,
         outbound_packets: Arc<RwLock<VecDeque<Packet>>>,
         sent_packets: Arc<RwLock<VecDeque<Packet>>>,
         received_packets: Arc<RwLock<VecDeque<Packet>>>,
@@ -48,8 +54,11 @@ impl UtpStream {
     ) -> Self {
         Self {
             socket,
-            connection_id,
+            connection_id_recv,
+            connection_id_send,
             remote_addr,
+            seq_number,
+            ack_number,
             outbound_packets,
             sent_packets,
             received_packets,
@@ -62,21 +71,48 @@ impl UtpStream {
             .await?
             .next()
             .ok_or_else(|| Error::MissingAddress)?;
-        let connection_id = socket.register_connection(remote_addr)?;
-        Ok(Self::new(
-            socket,
-            connection_id,
-            remote_addr,
-            // TODO: Queue up a SYN to send
-            Default::default(),
-            Default::default(),
-            Default::default(),
-            Default::default(),
-        ))
+
+        let connection_id_recv = socket.register_connection(remote_addr)?;
+        let connection_id_send = connection_id_recv.wrapping_add(1);
+        let seq_number = rand::random::<u16>();
+        // Just set ack_number to 0, this shouldn't be read by the remote socket anyway
+        let ack_number = 0;
+        #[rustfmt::skip]
+        let syn = Packet::new(PacketType::Syn, 1, connection_id_recv, 0, 0, 0, seq_number,
+                              ack_number, vec![], Bytes::new());
+        let seq_number = seq_number.wrapping_add(1);
+        socket.send_to(syn, remote_addr).await?;
+
+        // state: SYN sent
+
+        let response_packet = socket.get_packet(connection_id_recv, remote_addr).await?;
+        match response_packet.packet_type {
+            PacketType::State => {
+                // state: connected
+                Ok(Self::new(
+                    socket,
+                    connection_id_recv,
+                    connection_id_send,
+                    remote_addr,
+                    seq_number,
+                    response_packet.seq_number,
+                    Default::default(),
+                    Default::default(),
+                    Default::default(),
+                    Default::default(),
+                ))
+            }
+            // TODO: other packet types not allowed
+            _ => todo!(),
+        }
     }
 
-    pub fn connection_id(&self) -> u16 {
-        self.connection_id
+    pub fn connection_id_recv(&self) -> u16 {
+        self.connection_id_recv
+    }
+
+    pub fn connection_id_send(&self) -> u16 {
+        self.connection_id_send
     }
 
     pub fn local_addr(&self) -> SocketAddr {
@@ -90,11 +126,11 @@ impl UtpStream {
     pub async fn recv(&mut self) -> Result<()> {
         let packet = self
             .socket
-            .get_packet(self.connection_id, self.remote_addr)
+            .get_packet(self.connection_id_recv, self.remote_addr)
             .await?;
         debug!(
             "connection {} received {:?} from {}",
-            self.connection_id, packet.packet_type, self.remote_addr
+            self.connection_id_recv, packet.packet_type, self.remote_addr
         );
 
         // Reply with State if we received a Data
@@ -102,7 +138,7 @@ impl UtpStream {
             PacketType::Data => {
                 // TODO: Use actual values for packet fields
                 #[rustfmt::skip]
-                let ack = Packet::new(PacketType::State, 1, self.connection_id(), 0, 0, 0, 0,
+                let ack = Packet::new(PacketType::State, 1, self.connection_id_send, 0, 0, 0, 0,
                                       packet.seq_number, vec![], Bytes::new());
                 self.outbound_packets.write().unwrap().push_back(ack);
                 // TODO: This will send all packets waiting in the outbound buffer. Is this the
@@ -131,7 +167,7 @@ impl UtpStream {
         buf.chunks(MAX_DATA_SEGMENT_SIZE).for_each(|chunk| {
             // TODO: Use actual values for packet fields
             #[rustfmt::skip]
-            let packet = Packet::new(PacketType::Data, 1, self.connection_id(), 0, 0, 0, 0, 0,
+            let packet = Packet::new(PacketType::Data, 1, self.connection_id_send, 0, 0, 0, 0, 0,
                                      vec![], Bytes::copy_from_slice(chunk));
             outbound_packets.push_back(packet);
         });
@@ -170,7 +206,7 @@ impl fmt::Debug for UtpStream {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_fmt(format_args!(
             "UtpStream {{ id: {}, local_addr: {}, remote_addr: {} }}",
-            self.connection_id,
+            self.connection_id_recv,
             self.socket.local_addr(),
             self.remote_addr
         ))

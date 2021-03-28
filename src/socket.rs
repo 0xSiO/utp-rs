@@ -82,6 +82,7 @@ impl UtpSocket {
             "Conn #{}: {} -> {} {:?}",
             packet.connection_id, self.local_addr, remote_addr, packet.packet_type
         );
+        // TODO: Update packet timing data
         Ok(self
             .socket
             .send_to(&Bytes::from(packet), remote_addr)
@@ -188,11 +189,10 @@ impl UtpSocket {
 
     pub(crate) fn register_connection(&self, remote_addr: SocketAddr) -> Result<u16> {
         let mut states = self.packet_queues.write().unwrap();
-        let mut connection_id = 0;
+        let mut connection_id = rand::random::<u16>();
+        // TODO: Maybe timeout if this takes too long
         while states.contains_key(&(connection_id, remote_addr)) {
-            connection_id = connection_id
-                .checked_add(1)
-                .ok_or_else(|| Error::TooManyConnections)?;
+            connection_id = rand::random::<u16>();
         }
         debug_assert!(states
             .insert((connection_id, remote_addr), Default::default())

@@ -15,7 +15,7 @@ pub struct UtpListener {
 }
 
 impl UtpListener {
-    fn new(socket: Arc<UtpSocket>) -> Self {
+    pub(crate) fn new(socket: Arc<UtpSocket>) -> Self {
         Self { socket }
     }
 
@@ -30,28 +30,43 @@ impl UtpListener {
 
     pub async fn accept(&self) -> Result<UtpStream> {
         loop {
-            let (packet, addr) = self.socket.get_syn().await?;
+            let (packet, remote_addr) = self.socket.get_syn().await?;
+            let connection_id_recv = packet.connection_id.wrapping_add(1);
+            let connection_id_send = packet.connection_id;
+            let seq_number = rand::random::<u16>();
+            let ack_number = packet.seq_number;
+
+            // state: SYN received
+
             if self
                 .socket
-                .init_connection(packet.connection_id, addr)
+                .init_connection(connection_id_recv, remote_addr)
                 .is_ok()
             {
-                // TODO: Craft valid state packet to respond to SYN
                 #[rustfmt::skip]
-                let _state_packet = Packet::new(
-                    PacketType::State, 1, packet.connection_id,
-                    0, 0, 0, 0, 0, vec![], Bytes::new(),
+                let syn_ack = Packet::new(
+                    PacketType::State, 1, connection_id_send, 0, 0, 0, seq_number, ack_number,
+                    vec![], Bytes::new(),
                 );
+                let seq_number = seq_number.wrapping_add(1);
+                self.socket.send_to(syn_ack, remote_addr).await?;
+
+                // TODO: We aren't technically 'connected' until we start receiving data packets
+
                 return Ok(UtpStream::new(
                     Arc::clone(&self.socket),
-                    packet.connection_id,
-                    addr,
-                    // TODO: Queue up a STATE to send
+                    connection_id_recv,
+                    connection_id_send,
+                    remote_addr,
+                    seq_number,
+                    ack_number,
                     Default::default(),
                     Default::default(),
                     Default::default(),
                     Default::default(),
                 ));
+            } else {
+                todo!("Failed to initialize connection. Perhaps one exists already in the routing table?");
             }
         }
     }
