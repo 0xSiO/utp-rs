@@ -143,27 +143,25 @@ mod tests {
         let local_socket = Arc::new(get_socket().await);
         let remote_socket = Arc::new(get_socket().await);
 
-        let local_addr = local_socket.local_addr();
-        let remote_addr = remote_socket.local_addr();
-
-        let mut stream = UtpStream::connect(local_socket, remote_addr).await.unwrap();
+        let (mut stream_1, _) =
+            get_connection_pair(Arc::clone(&local_socket), Arc::clone(&remote_socket)).await;
 
         // Send 1 packet of data to the remote socket
         let message = &[1_u8; crate::stream::MAX_DATA_SEGMENT_SIZE];
-        stream.write_all(message).await.unwrap();
-        stream.flush().await.unwrap();
+        stream_1.write_all(message).await.unwrap();
+        stream_1.flush().await.unwrap();
 
         // Check that we received a packet on the remote socket
         let (packet, addr) = remote_socket.recv_from().await.unwrap();
         assert_eq!(packet.data.len(), message.len());
         assert_eq!(packet.data.as_ref(), message);
-        assert_eq!(addr, local_addr);
+        assert_eq!(addr, local_socket.local_addr());
 
         // Send a larger message that should break into several packets
         const NUM_PACKETS: usize = 4;
         let large_message = &[1_u8; crate::stream::MAX_DATA_SEGMENT_SIZE * NUM_PACKETS];
-        stream.write_all(large_message).await.unwrap();
-        stream.flush().await.unwrap();
+        stream_1.write_all(large_message).await.unwrap();
+        stream_1.flush().await.unwrap();
 
         // Check that all the data made it to the remote socket
         let mut result: Vec<u8> = Vec::with_capacity(large_message.len());
@@ -184,12 +182,8 @@ mod tests {
         let local_socket = Arc::new(get_socket().await);
         let remote_socket = Arc::new(get_socket().await);
 
-        let local_addr = local_socket.local_addr();
-        let remote_addr = remote_socket.local_addr();
-
-        let mut stream_1 = UtpStream::connect(Arc::clone(&local_socket), remote_addr)
-            .await
-            .unwrap();
+        let (mut stream_1, mut stream_2) =
+            get_connection_pair(Arc::clone(&local_socket), Arc::clone(&remote_socket)).await;
 
         // Send some data to the remote socket
         let message = &[1_u8; crate::stream::MAX_DATA_SEGMENT_SIZE];
@@ -197,12 +191,11 @@ mod tests {
         stream_1.flush().await.unwrap();
 
         // Check that we successfully received data on the remote socket
-        let mut stream_2 = UtpStream::connect(remote_socket, local_addr).await.unwrap();
         assert!(stream_2.recv().await.is_ok());
 
         // Check that the remote socket sent us back a State packet
         let (packet, addr) = local_socket.recv_from().await.unwrap();
-        assert_eq!(addr, remote_addr);
         assert_eq!(packet.packet_type, PacketType::State);
+        assert_eq!(addr, remote_socket.local_addr());
     }
 }
