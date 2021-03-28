@@ -93,11 +93,6 @@ impl UtpStream {
             .await?
             .unwrap();
 
-        debug!(
-            "conn {} ACKed conn {}'s SYN",
-            connection_id_send, connection_id_recv
-        );
-
         match response_packet.packet_type {
             PacketType::State => {
                 // state: connected

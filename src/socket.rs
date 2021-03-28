@@ -250,7 +250,6 @@ impl<'s> PacketStream<'s> {
             .get(&(self.connection_id, self.remote_addr))
         {
             if let Some(packet) = queue.pop() {
-                debug!("conn {} got queued packet", self.connection_id);
                 return Poll::Ready(Some(Ok(packet)));
             }
         } else {
@@ -258,7 +257,6 @@ impl<'s> PacketStream<'s> {
             unreachable!();
         }
 
-        debug!("conn {} polling socket", self.connection_id);
         if let Poll::Ready(result) = self.socket.poll_recv_from(cx) {
             let (packet, actual_addr) = result?;
 
@@ -266,15 +264,9 @@ impl<'s> PacketStream<'s> {
                 self.socket.syn_packets.push((packet, actual_addr));
             } else {
                 if (packet.connection_id, actual_addr) == (self.connection_id, self.remote_addr) {
-                    debug!("conn {} got packet from socket", self.connection_id);
                     return Poll::Ready(Some(Ok(packet)));
                 } else {
-                    debug!(
-                        "conn {} routing packet to conn {}",
-                        self.connection_id, packet.connection_id
-                    );
                     self.socket.route_packet(packet, actual_addr);
-                    debug!("packet routed");
                 }
             }
         }
