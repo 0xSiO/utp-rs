@@ -108,12 +108,13 @@ impl UtpSocket {
         Poll::Ready(Ok(bytes_written))
     }
 
-    pub async fn recv_from(&self) -> Result<(Packet, SocketAddr)> {
+    pub async fn recv_from(&self) -> io::Result<(Packet, SocketAddr)> {
         let mut buf = BytesMut::with_capacity(MAX_DATAGRAM_SIZE);
         buf.resize(MAX_DATAGRAM_SIZE, 0);
         let (bytes_read, remote_addr) = self.socket.recv_from(&mut buf).await?;
         buf.truncate(bytes_read);
-        let packet = Packet::try_from(buf.freeze())?;
+        let packet = Packet::try_from(buf.freeze())
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         debug!(
             "Conn #{}: {} <- {} {:?} ({} bytes)",
             packet.connection_id, self.local_addr, remote_addr, packet.packet_type, bytes_read
@@ -121,11 +122,12 @@ impl UtpSocket {
         Ok((packet, remote_addr))
     }
 
-    fn poll_recv_from(&self, cx: &mut Context<'_>) -> Poll<Result<(Packet, SocketAddr)>> {
+    fn poll_recv_from(&self, cx: &mut Context<'_>) -> Poll<io::Result<(Packet, SocketAddr)>> {
         let mut buf = [0; MAX_DATAGRAM_SIZE];
         let mut buf = ReadBuf::new(&mut buf);
         let remote_addr = ready!(self.socket.poll_recv_from(cx, &mut buf))?;
-        let packet = Packet::try_from(Bytes::copy_from_slice(buf.filled()))?;
+        let packet = Packet::try_from(Bytes::copy_from_slice(buf.filled()))
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         debug!(
             "Conn #{}: {} <- {} {:?} ({} bytes)",
             packet.connection_id,
@@ -152,7 +154,7 @@ impl UtpSocket {
         }
     }
 
-    pub(crate) async fn get_syn(&self) -> Result<(Packet, SocketAddr)> {
+    pub(crate) async fn get_syn(&self) -> io::Result<(Packet, SocketAddr)> {
         loop {
             if let Some(packet_and_addr) = self.syn_packets.pop() {
                 return Ok(packet_and_addr);
@@ -171,14 +173,17 @@ impl UtpSocket {
         &self,
         connection_id: u16,
         remote_addr: SocketAddr,
-    ) -> Result<()> {
+    ) -> io::Result<()> {
         match self
             .packet_queues
             .write()
             .unwrap()
             .entry((connection_id, remote_addr))
         {
-            Entry::Occupied(_) => Err(Error::ConnectionExists(connection_id, remote_addr)),
+            Entry::Occupied(_) => Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                Error::ConnectionExists(connection_id, remote_addr),
+            )),
             vacant => {
                 vacant.or_default();
                 Ok(())
@@ -186,7 +191,7 @@ impl UtpSocket {
         }
     }
 
-    pub(crate) fn register_connection(&self, remote_addr: SocketAddr) -> Result<u16> {
+    pub(crate) fn register_connection(&self, remote_addr: SocketAddr) -> u16 {
         let mut states = self.packet_queues.write().unwrap();
         let mut connection_id = rand::random::<u16>();
         // TODO: Maybe timeout if this takes too long
@@ -196,14 +201,15 @@ impl UtpSocket {
         debug_assert!(states
             .insert((connection_id, remote_addr), Default::default())
             .is_none());
-        Ok(connection_id)
+
+        connection_id
     }
 
     pub(crate) fn packets(
         &self,
         connection_id: u16,
         remote_addr: SocketAddr,
-    ) -> impl Stream<Item = Result<Packet>> + '_ {
+    ) -> impl Stream<Item = io::Result<Packet>> + '_ {
         PacketStream {
             socket: self,
             connection_id,
@@ -213,9 +219,9 @@ impl UtpSocket {
 }
 
 impl TryFrom<UdpSocket> for UtpSocket {
-    type Error = Error;
+    type Error = io::Error;
 
-    fn try_from(socket: UdpSocket) -> Result<Self> {
+    fn try_from(socket: UdpSocket) -> io::Result<Self> {
         let local_addr = socket.local_addr()?;
         Ok(UtpSocket::new(
             socket,
@@ -227,9 +233,9 @@ impl TryFrom<UdpSocket> for UtpSocket {
 }
 
 impl TryFrom<std::net::UdpSocket> for UtpSocket {
-    type Error = Error;
+    type Error = io::Error;
 
-    fn try_from(socket: std::net::UdpSocket) -> Result<Self> {
+    fn try_from(socket: std::net::UdpSocket) -> io::Result<Self> {
         Self::try_from(UdpSocket::try_from(socket)?)
     }
 }
@@ -241,7 +247,7 @@ struct PacketStream<'s> {
 }
 
 impl<'s> PacketStream<'s> {
-    fn poll_next_priv(&self, cx: &mut Context<'_>) -> Poll<Option<Result<Packet>>> {
+    fn poll_next_priv(&self, cx: &mut Context<'_>) -> Poll<Option<io::Result<Packet>>> {
         if let Some(queue) = self
             .socket
             .packet_queues
@@ -281,7 +287,7 @@ impl<'s> PacketStream<'s> {
 }
 
 impl<'s> Stream for PacketStream<'s> {
-    type Item = Result<Packet>;
+    type Item = io::Result<Packet>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.poll_next_priv(cx)

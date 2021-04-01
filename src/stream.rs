@@ -73,7 +73,7 @@ impl UtpStream {
             .next()
             .ok_or_else(|| Error::MissingAddress)?;
 
-        let connection_id_recv = socket.register_connection(remote_addr)?;
+        let connection_id_recv = socket.register_connection(remote_addr);
         let connection_id_send = connection_id_recv.wrapping_add(1);
         let seq_number = rand::random::<u16>();
         // Just set ack_number to 0, this shouldn't be read by the remote socket anyway
