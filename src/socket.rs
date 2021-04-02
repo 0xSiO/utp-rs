@@ -1,15 +1,14 @@
 use std::{
-    collections::{hash_map::Entry, HashMap},
     convert::TryFrom,
     io,
     net::SocketAddr,
     pin::Pin,
-    sync::RwLock,
     task::{Context, Poll},
 };
 
 use bytes::{Bytes, BytesMut};
 use crossbeam_queue::SegQueue;
+use dashmap::{mapref::entry::Entry, DashMap};
 use futures_util::{ready, stream::Stream};
 use log::{debug, trace};
 use tokio::{
@@ -28,7 +27,7 @@ pub(crate) const MAX_DATAGRAM_SIZE: usize = 1472;
 #[derive(Debug)]
 pub struct UtpSocket {
     socket: UdpSocket,
-    packet_queues: RwLock<HashMap<(u16, SocketAddr), SegQueue<Packet>>>,
+    packet_queues: DashMap<(u16, SocketAddr), SegQueue<Packet>>,
     syn_packets: SegQueue<(Packet, SocketAddr)>,
     local_addr: SocketAddr,
     // Maximum number of bytes the socket may have in-flight at any given time
@@ -42,7 +41,7 @@ pub struct UtpSocket {
 impl UtpSocket {
     fn new(
         socket: UdpSocket,
-        packet_queues: RwLock<HashMap<(u16, SocketAddr), SegQueue<Packet>>>,
+        packet_queues: DashMap<(u16, SocketAddr), SegQueue<Packet>>,
         syn_packets: SegQueue<(Packet, SocketAddr)>,
         local_addr: SocketAddr,
     ) -> Self {
@@ -140,12 +139,7 @@ impl UtpSocket {
     }
 
     fn route_packet(&self, packet: Packet, remote_addr: SocketAddr) {
-        match self
-            .packet_queues
-            .read()
-            .unwrap()
-            .get(&(packet.connection_id, remote_addr))
-        {
+        match self.packet_queues.get(&(packet.connection_id, remote_addr)) {
             Some(queue) => queue.push(packet),
             None => debug!(
                 "no connections found for packet from {}: {:?}",
@@ -174,35 +168,38 @@ impl UtpSocket {
         connection_id: u16,
         remote_addr: SocketAddr,
     ) -> io::Result<()> {
-        match self
-            .packet_queues
-            .write()
-            .unwrap()
-            .entry((connection_id, remote_addr))
-        {
+        // Note that the entry holds a dashmap::lock::RwLockWriteGuard on the relevant data
+        match self.packet_queues.entry((connection_id, remote_addr)) {
             Entry::Occupied(_) => Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 Error::ConnectionExists(connection_id, remote_addr),
             )),
             vacant => {
-                vacant.or_default();
+                let entry = vacant.or_default();
+                // Add some assertions just to be sure this completed correctly
+                debug_assert_eq!(entry.key(), &(connection_id, remote_addr));
+                debug_assert!(entry.value().is_empty());
                 Ok(())
             }
         }
     }
 
     pub(crate) fn register_connection(&self, remote_addr: SocketAddr) -> u16 {
-        let mut states = self.packet_queues.write().unwrap();
-        let mut connection_id = rand::random::<u16>();
         // TODO: Maybe timeout if this takes too long
-        while states.contains_key(&(connection_id, remote_addr)) {
-            connection_id = rand::random::<u16>();
+        loop {
+            let connection_id = rand::random::<u16>();
+            // Note that the entry holds a dashmap::lock::RwLockWriteGuard on the relevant data
+            match self.packet_queues.entry((connection_id, remote_addr)) {
+                Entry::Occupied(_) => continue,
+                vacant => {
+                    let entry = vacant.or_default();
+                    // Add some assertions just to be sure this completed correctly
+                    debug_assert_eq!(entry.key(), &(connection_id, remote_addr));
+                    debug_assert!(entry.value().is_empty());
+                    return connection_id;
+                }
+            }
         }
-        debug_assert!(states
-            .insert((connection_id, remote_addr), Default::default())
-            .is_none());
-
-        connection_id
     }
 
     pub(crate) fn packets(
@@ -251,8 +248,6 @@ impl<'s> PacketStream<'s> {
         if let Some(queue) = self
             .socket
             .packet_queues
-            .read()
-            .unwrap()
             .get(&(self.connection_id, self.remote_addr))
         {
             if let Some(packet) = queue.pop() {
