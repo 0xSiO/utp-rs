@@ -4,10 +4,10 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::error::*;
 
-/// See http://bittorrent.org/beps/bep_0029.html#header-format
+/// See https://www.bittorrent.org/beps/bep_0029.html#header-format
 pub(crate) const PACKET_HEADER_LEN: usize = 20;
 
-/// See http://bittorrent.org/beps/bep_0029.html#type
+/// See https://www.bittorrent.org/beps/bep_0029.html#type
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum PacketType {
@@ -33,7 +33,7 @@ impl TryFrom<u8> for PacketType {
     }
 }
 
-/// See http://bittorrent.org/beps/bep_0029.html#extension and UTP-related code in
+/// See https://www.bittorrent.org/beps/bep_0029.html#extension and UTP-related code in
 /// https://github.com/arvidn/libtorrent
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum ExtensionType {
@@ -68,7 +68,7 @@ impl From<ExtensionType> for u8 {
     }
 }
 
-/// See http://bittorrent.org/beps/bep_0029.html#extension
+/// See https://www.bittorrent.org/beps/bep_0029.html#extension
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Extension {
     extension_type: ExtensionType,
@@ -84,7 +84,7 @@ impl Extension {
     }
 }
 
-/// See http://bittorrent.org/beps/bep_0029.html#header-format
+/// See https://www.bittorrent.org/beps/bep_0029.html#header-format
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Packet {
     pub(crate) packet_type: PacketType,

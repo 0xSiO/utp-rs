@@ -19,12 +19,12 @@ impl UtpListener {
         Self { socket }
     }
 
-    /// Create a new UDP socket and attempt to bind it to the provided address.
+    /// Create a new UtpListener and attempt to bind it to the provided address.
     pub async fn bind(addr: impl ToSocketAddrs) -> Result<Self> {
         Ok(Self::new(Arc::new(UtpSocket::bind(addr).await?)))
     }
 
-    /// Return the local address that this socket is bound to.
+    /// Return the local address that this listener is bound to.
     pub fn local_addr(&self) -> SocketAddr {
         self.socket.local_addr()
     }

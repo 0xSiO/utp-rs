@@ -53,6 +53,7 @@ impl UtpSocket {
         }
     }
 
+    /// Create a new [`UtpSocket`] and attempt to bind it to the provided address.
     pub async fn bind(local_addr: impl ToSocketAddrs) -> io::Result<Self> {
         let udp_socket = UdpSocket::bind(local_addr).await?;
         let local_addr = udp_socket.local_addr()?;
@@ -65,10 +66,12 @@ impl UtpSocket {
         ))
     }
 
+    /// Return the local [`SocketAddr`] that this socket is bound to.
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
     }
 
+    /// Send a [`Packet`] to a remote address.
     pub async fn send_to(
         &self,
         packet: Packet,
@@ -107,6 +110,7 @@ impl UtpSocket {
         Poll::Ready(Ok(bytes_written))
     }
 
+    /// Receive a [`Packet`] from a remote address.
     pub async fn recv_from(&self) -> io::Result<(Packet, SocketAddr)> {
         let mut buf = BytesMut::with_capacity(MAX_DATAGRAM_SIZE);
         buf.resize(MAX_DATAGRAM_SIZE, 0);
@@ -138,6 +142,8 @@ impl UtpSocket {
         Poll::Ready(Ok((packet, remote_addr)))
     }
 
+    /// Route a [`Packet`] from a remote address to the correct packet queue for the connection
+    /// registered in the routing table.
     fn route_packet(&self, packet: Packet, remote_addr: SocketAddr) {
         match self.packet_queues.get(&(packet.connection_id, remote_addr)) {
             Some(queue) => queue.push(packet),
@@ -148,6 +154,8 @@ impl UtpSocket {
         }
     }
 
+    /// Fetch a SYN packet from either the dedicated SYN packet buffer or wait until the underlying
+    /// socket receives a SYN packet. Any other packets are routed to their respective connections.
     pub(crate) async fn get_syn(&self) -> io::Result<(Packet, SocketAddr)> {
         loop {
             if let Some(packet_and_addr) = self.syn_packets.pop() {
@@ -163,6 +171,8 @@ impl UtpSocket {
         }
     }
 
+    /// Initialize a new connection in the socket routing table. The connection ID and remote
+    /// address pair should not already exist in the routing table.
     pub(crate) fn init_connection(
         &self,
         connection_id: u16,
@@ -184,6 +194,8 @@ impl UtpSocket {
         }
     }
 
+    /// Register a new connection in the socket routing table. A new connection ID will be
+    /// generated for this entry and returned.
     pub(crate) fn register_connection(&self, remote_addr: SocketAddr) -> u16 {
         // TODO: Maybe timeout if this takes too long
         loop {
@@ -202,6 +214,8 @@ impl UtpSocket {
         }
     }
 
+    /// Return a stream of [`Packet`]s from this socket intended for the provided connection ID and
+    /// remote address.
     pub(crate) fn packets(
         &self,
         connection_id: u16,

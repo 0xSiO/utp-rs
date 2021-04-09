@@ -67,6 +67,8 @@ impl UtpStream {
         }
     }
 
+    /// Create a new [`UtpStream`] using the given socket, and attempt to connect the [`UtpStream`]
+    /// to the provided address.
     pub async fn connect(socket: Arc<UtpSocket>, remote_addr: impl ToSocketAddrs) -> Result<Self> {
         let remote_addr = lookup_host(remote_addr)
             .await?
@@ -114,18 +116,23 @@ impl UtpStream {
         }
     }
 
+    /// Return the connection ID used to receive packets for this connection. This ID is the one
+    /// registered in the [`UtpSocket`] internal routing table.
     pub fn connection_id_recv(&self) -> u16 {
         self.connection_id_recv
     }
 
+    /// Return the connection ID used to send packets to the remote socket.
     pub fn connection_id_send(&self) -> u16 {
         self.connection_id_send
     }
 
+    /// Return the local [`SocketAddr`] to which the socket for this connection is bound.
     pub fn local_addr(&self) -> SocketAddr {
         self.socket.local_addr()
     }
 
+    /// Return the remote [`SocketAddr`] to which this connection is sending packets.
     pub fn remote_addr(&self) -> SocketAddr {
         self.remote_addr
     }
@@ -172,6 +179,7 @@ impl UtpStream {
         todo!()
     }
 
+    /// Chunk the given data into MAX_DATA_SEGMENT_SIZE and place in the outbound packet buffer.
     fn poll_write_priv(&mut self, _cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
         let mut outbound_packets = self.outbound_packets.write().unwrap();
         // TODO: Don't copy each chunk, use Bytes::split_to to get the bytes for each packet
@@ -185,6 +193,8 @@ impl UtpStream {
         Poll::Ready(Ok(buf.len()))
     }
 
+    /// Flush the outbound packet buffer by sending each packet to the remote address, retrying on
+    /// failure if possible, until there are no more outbound packets.
     fn poll_flush_priv(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         while let Some(packet) = self.outbound_packets.write().unwrap().pop_front() {
             match self
