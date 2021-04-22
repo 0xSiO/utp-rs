@@ -184,8 +184,8 @@ impl UtpSocket {
                 io::ErrorKind::AlreadyExists,
                 Error::ConnectionExists(connection_id, remote_addr),
             )),
-            vacant => {
-                let entry = vacant.or_default();
+            Entry::Vacant(entry) => {
+                let entry = entry.insert(Default::default());
                 // Add some assertions just to be sure this completed correctly
                 debug_assert_eq!(entry.key(), &(connection_id, remote_addr));
                 debug_assert!(entry.value().is_empty());
