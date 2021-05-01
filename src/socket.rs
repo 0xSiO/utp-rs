@@ -302,3 +302,74 @@ impl<'s> Stream for PacketStream<'s> {
         self.poll_next_priv(cx)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
+    use super::*;
+
+    async fn get_socket() -> UtpSocket {
+        return UtpSocket::bind("localhost:0").await.unwrap();
+    }
+
+    fn get_packet() -> Packet {
+        return Packet::new(PacketType::State, 1, 2, 3, 4, 5, 6, 7, vec![], Bytes::new());
+    }
+
+    #[tokio::test]
+    async fn bind_test() {
+        let socket = UtpSocket::bind("127.0.0.1:0").await.unwrap();
+        assert_eq!(
+            socket.socket.local_addr().unwrap().ip(),
+            Ipv4Addr::LOCALHOST
+        );
+
+        let socket = UtpSocket::bind("::1:0").await.unwrap();
+        assert_eq!(
+            socket.socket.local_addr().unwrap().ip(),
+            Ipv6Addr::LOCALHOST
+        );
+    }
+
+    #[tokio::test]
+    async fn local_addr_test() {
+        let socket = get_socket().await;
+        assert_eq!(socket.local_addr(), socket.socket.local_addr().unwrap());
+    }
+
+    #[tokio::test]
+    async fn send_to_test() {
+        let (sender, receiver) = (get_socket().await, get_socket().await);
+
+        assert_eq!(
+            sender
+                .send_to(
+                    get_packet(),
+                    format!("localhost:{}", receiver.local_addr().port()),
+                )
+                .await
+                .unwrap(),
+            Bytes::from(get_packet()).len()
+        );
+
+        assert!(sender
+            .send_to(get_packet(), "does not exist")
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn recv_from_test() {
+        let (sender, receiver) = (get_socket().await, get_socket().await);
+        sender
+            .send_to(get_packet(), receiver.local_addr())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            receiver.recv_from().await.unwrap(),
+            (get_packet(), sender.local_addr())
+        );
+    }
+}
