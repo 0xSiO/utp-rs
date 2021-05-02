@@ -305,7 +305,12 @@ impl<'s> Stream for PacketStream<'s> {
 
 #[cfg(test)]
 mod tests {
-    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::{
+        net::{Ipv4Addr, Ipv6Addr},
+        sync::Arc,
+    };
+
+    use futures_util::TryStreamExt;
 
     use super::*;
 
@@ -401,5 +406,180 @@ mod tests {
                 .pop(),
             Some(packet)
         );
+    }
+
+    #[tokio::test]
+    async fn get_syn_test() {
+        let (sender, receiver) = (get_socket().await, get_socket().await);
+        let mut packet = get_packet();
+        packet.packet_type = PacketType::Syn;
+
+        // Receive from SYN packet queue
+
+        receiver
+            .syn_packets
+            .push((packet.clone(), sender.local_addr()));
+
+        assert_eq!(
+            receiver.get_syn().await.unwrap(),
+            (packet.clone(), sender.local_addr())
+        );
+
+        // Wait for SYN using recv_from
+
+        let expected_packet = packet.clone();
+        let sender_addr = sender.local_addr();
+        let receiver_addr = receiver.local_addr();
+
+        let recv_handle = tokio::spawn(async move {
+            assert_eq!(
+                receiver.get_syn().await.unwrap(),
+                (expected_packet, sender_addr)
+            );
+        });
+
+        tokio::spawn(async move {
+            sender.send_to(packet.clone(), receiver_addr).await.unwrap();
+        });
+
+        recv_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn init_connection_test() {
+        let socket = get_socket().await;
+        let (connection_id, remote_addr) = (1, "127.0.0.2:8080".parse().unwrap());
+
+        socket.init_connection(connection_id, remote_addr).unwrap();
+
+        assert!(socket
+            .packet_queues
+            .get(&(connection_id, remote_addr))
+            .unwrap()
+            .is_empty());
+
+        assert!(socket.init_connection(connection_id, remote_addr).is_err());
+    }
+
+    #[tokio::test]
+    async fn register_connection_test() {
+        let socket = get_socket().await;
+        let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        let id_1 = socket.register_connection(addr);
+        let id_2 = socket.register_connection(addr);
+
+        assert_ne!(id_1, id_2);
+
+        assert!(socket.packet_queues.get(&(id_1, addr)).unwrap().is_empty());
+
+        // Add a packet to this queue. Other queue that we set up should be empty.
+        socket
+            .packet_queues
+            .get(&(id_1, addr))
+            .unwrap()
+            .push(get_packet());
+
+        assert!(socket.packet_queues.get(&(id_2, addr)).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn packet_stream_test() {
+        let (sender, receiver) = (Arc::new(get_socket().await), Arc::new(get_socket().await));
+        let packet = get_packet();
+
+        // Receive packet from existing packet queue
+
+        receiver
+            .init_connection(packet.connection_id, sender.local_addr())
+            .unwrap();
+        receiver
+            .packet_queues
+            .get(&(packet.connection_id, sender.local_addr()))
+            .unwrap()
+            .push(packet.clone());
+
+        assert_eq!(
+            receiver
+                .packets(packet.connection_id, sender.local_addr())
+                .try_next()
+                .await
+                .unwrap(),
+            Some(packet.clone())
+        );
+
+        // Receive packet using poll_recv_from
+
+        sender
+            .send_to(packet.clone(), receiver.local_addr())
+            .await
+            .unwrap();
+
+        let packet_clone = packet.clone();
+        let sender_clone = Arc::clone(&sender);
+        let receiver_clone = Arc::clone(&receiver);
+
+        let recv_handle = tokio::spawn(async move {
+            assert_eq!(
+                receiver_clone
+                    .packets(packet_clone.connection_id, sender_clone.local_addr())
+                    .try_next()
+                    .await
+                    .unwrap(),
+                Some(packet_clone)
+            );
+        });
+
+        recv_handle.await.unwrap();
+
+        // Route SYN packets to the SYN packet queue
+
+        let packet_clone = packet.clone();
+        let mut syn_packet = packet.clone();
+        syn_packet.packet_type = PacketType::Syn;
+        let sender_clone = Arc::clone(&sender);
+        let receiver_clone = Arc::clone(&receiver);
+
+        tokio::spawn(async move {
+            sender_clone
+                .send_to(syn_packet, receiver_clone.local_addr())
+                .await
+                .unwrap();
+            sender_clone
+                .send_to(packet_clone, receiver_clone.local_addr())
+                .await
+                .unwrap();
+        });
+
+        let packet_clone = packet.clone();
+        let sender_clone = Arc::clone(&sender);
+        let receiver_clone = Arc::clone(&receiver);
+
+        let recv_handle = tokio::spawn(async move {
+            assert_eq!(
+                receiver_clone
+                    .packets(packet_clone.connection_id, sender_clone.local_addr())
+                    .try_next()
+                    .await
+                    .unwrap(),
+                Some(packet_clone)
+            );
+
+            // Should have a SYN packet waiting for us
+            assert!(receiver_clone.get_syn().await.is_ok());
+        });
+
+        recv_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn conversions_test() {
+        let std_udp =
+            tokio::task::spawn_blocking(|| std::net::UdpSocket::bind("localhost:0").unwrap())
+                .await
+                .unwrap();
+        assert!(UtpSocket::try_from(std_udp).is_ok());
+
+        let tokio_udp = tokio::net::UdpSocket::bind("localhost:0").await.unwrap();
+        assert!(UtpSocket::try_from(tokio_udp).is_ok());
     }
 }
