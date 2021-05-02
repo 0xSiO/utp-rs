@@ -372,4 +372,34 @@ mod tests {
             (get_packet(), sender.local_addr())
         );
     }
+
+    #[tokio::test]
+    async fn route_packet_test() {
+        let socket = get_socket().await;
+        let packet = get_packet();
+        let connection_id = packet.connection_id;
+        let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+
+        // Create a queue in the routing table for the packet to end up in
+        socket.init_connection(connection_id, addr).unwrap();
+
+        socket.route_packet(packet.clone(), addr);
+        assert_eq!(
+            socket
+                .packet_queues
+                .get(&(connection_id, addr))
+                .unwrap()
+                .len(),
+            1
+        );
+
+        assert_eq!(
+            socket
+                .packet_queues
+                .get(&(connection_id, addr))
+                .unwrap()
+                .pop(),
+            Some(packet)
+        );
+    }
 }
