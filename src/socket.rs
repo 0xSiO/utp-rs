@@ -313,14 +313,7 @@ mod tests {
     use futures_util::TryStreamExt;
 
     use super::*;
-
-    async fn get_socket() -> UtpSocket {
-        return UtpSocket::bind("localhost:0").await.unwrap();
-    }
-
-    fn get_packet() -> Packet {
-        return Packet::new(PacketType::State, 1, 2, 3, 4, 5, 6, 7, vec![], Bytes::new());
-    }
+    use crate::test_helper::*;
 
     #[tokio::test]
     async fn bind_test() {

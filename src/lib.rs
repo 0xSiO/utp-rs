@@ -6,6 +6,9 @@ mod packet;
 mod socket;
 mod stream;
 
+#[cfg(test)]
+mod test_helper;
+
 pub use crate::{listener::UtpListener, socket::UtpSocket, stream::UtpStream};
 
 // General overview of architecture:

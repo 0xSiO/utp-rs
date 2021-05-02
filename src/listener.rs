@@ -89,3 +89,57 @@ impl From<Arc<UtpSocket>> for UtpListener {
         Self::new(Arc::clone(&socket))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
+    use super::*;
+    use crate::test_helper::*;
+
+    #[tokio::test]
+    async fn bind_test() {
+        let listener = UtpListener::bind("127.0.0.1:0").await.unwrap();
+        assert_eq!(listener.socket.local_addr().ip(), Ipv4Addr::LOCALHOST);
+
+        let listener = UtpListener::bind("::1:0").await.unwrap();
+        assert_eq!(listener.socket.local_addr().ip(), Ipv6Addr::LOCALHOST);
+    }
+
+    #[tokio::test]
+    async fn local_addr_test() {
+        let listener = get_listener().await;
+        assert_eq!(listener.local_addr(), listener.socket.local_addr());
+    }
+
+    #[tokio::test]
+    async fn accept_test() {
+        let listener = get_listener().await;
+        let receiver = Arc::clone(&listener.socket);
+        let sender = Arc::new(get_socket().await);
+
+        let mut packet = get_packet();
+        packet.packet_type = PacketType::Syn;
+
+        sender
+            .send_to(packet.clone(), receiver.local_addr())
+            .await
+            .unwrap();
+
+        let stream = listener.accept().await.unwrap();
+        assert_eq!(stream.connection_id_send(), packet.connection_id);
+        assert_eq!(
+            stream.connection_id_recv(),
+            packet.connection_id.wrapping_add(1)
+        );
+        assert_eq!(stream.local_addr(), receiver.local_addr());
+        assert_eq!(stream.remote_addr(), sender.local_addr());
+
+        // SYN-ACK should have been sent
+        let (syn_ack, addr) = sender.recv_from().await.unwrap();
+        assert_eq!(syn_ack.packet_type, PacketType::State);
+        assert_eq!(syn_ack.connection_id, stream.connection_id_send());
+        assert_eq!(syn_ack.ack_number, packet.seq_number);
+        assert_eq!(addr, receiver.local_addr());
+    }
+}
