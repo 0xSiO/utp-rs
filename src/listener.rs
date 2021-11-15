@@ -49,10 +49,10 @@ impl UtpListener {
             .is_ok()
         {
             #[rustfmt::skip]
-                let syn_ack = Packet::new(
-                    PacketType::State, 1, connection_id_send, 0, 0, 0, seq_number, ack_number,
-                    vec![], Bytes::new(),
-                );
+            let syn_ack = Packet::new(
+                PacketType::State, 1, connection_id_send, 0, 0, 0, seq_number, ack_number,
+                vec![], Bytes::new(),
+            );
             let seq_number = seq_number.wrapping_add(1);
             self.socket.send_to(syn_ack, remote_addr).await?;
 
