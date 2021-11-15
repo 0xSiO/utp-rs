@@ -196,6 +196,7 @@ impl UtpStream {
     /// Flush the outbound packet buffer by sending each packet to the remote address, retrying on
     /// failure if possible, until there are no more outbound packets.
     fn poll_flush_priv(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        // TODO: We should be able to send these concurrently
         while let Some(packet) = self.outbound_packets.write().unwrap().pop_front() {
             match self
                 .socket
