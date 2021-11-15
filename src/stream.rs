@@ -73,7 +73,7 @@ impl UtpStream {
         let remote_addr = lookup_host(remote_addr)
             .await?
             .next()
-            .ok_or_else(|| Error::MissingAddress)?;
+            .ok_or(Error::MissingAddress)?;
 
         let connection_id_recv = socket.register_connection(remote_addr);
         let connection_id_send = connection_id_recv.wrapping_add(1);

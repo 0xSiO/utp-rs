@@ -58,7 +58,7 @@ impl UtpListener {
 
             // TODO: We aren't technically 'connected' until we start receiving data packets
 
-            return Ok(UtpStream::new(
+            Ok(UtpStream::new(
                 Arc::clone(&self.socket),
                 connection_id_recv,
                 connection_id_send,
@@ -69,7 +69,7 @@ impl UtpListener {
                 Default::default(),
                 Default::default(),
                 Default::default(),
-            ));
+            ))
         } else {
             todo!(
                 "Failed to initialize connection. Perhaps one exists already in the routing table?"

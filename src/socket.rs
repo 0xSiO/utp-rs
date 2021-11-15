@@ -278,12 +278,11 @@ impl<'s> PacketStream<'s> {
 
             if let PacketType::Syn = packet.packet_type {
                 self.socket.syn_packets.push((packet, actual_addr));
+            } else if (packet.connection_id, actual_addr) == (self.connection_id, self.remote_addr)
+            {
+                return Poll::Ready(Some(Ok(packet)));
             } else {
-                if (packet.connection_id, actual_addr) == (self.connection_id, self.remote_addr) {
-                    return Poll::Ready(Some(Ok(packet)));
-                } else {
-                    self.socket.route_packet(packet, actual_addr);
-                }
+                self.socket.route_packet(packet, actual_addr);
             }
         }
 
@@ -292,7 +291,7 @@ impl<'s> PacketStream<'s> {
         //       architecture. Maybe use a single task to poll the socket and wait for data using
         //       channels.
         cx.waker().wake_by_ref();
-        return Poll::Pending;
+        Poll::Pending
     }
 }
 
