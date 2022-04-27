@@ -10,7 +10,7 @@ pub(crate) async fn get_socket() -> UtpSocket {
 }
 
 pub(crate) fn get_packet() -> Packet {
-    return Packet::new(PacketType::State, 1, 2, 3, 4, 5, 6, 7, vec![], Bytes::new());
+    Packet::new(PacketType::State, 1, 2, 3, 4, 5, 6, 7, vec![], Bytes::new())
 }
 
 pub(crate) async fn get_listener() -> UtpListener {

@@ -87,10 +87,7 @@ impl UtpSocket {
             packet.connection_id, self.local_addr, remote_addr, packet.packet_type
         );
         // TODO: Update packet timing data
-        Ok(self
-            .socket
-            .send_to(&Bytes::from(packet), remote_addr)
-            .await?)
+        self.socket.send_to(&Bytes::from(packet), remote_addr).await
     }
 
     // TODO: This method assumes that the packet will be sent with one successful call to poll_send_to, i.e.

@@ -7,7 +7,7 @@ publish = false
 [dependencies]
 bytes = "1.1.0"
 crossbeam-queue = "0.3.0"
-dashmap = "4.0.0"
+dashmap = "5.0.0"
 futures-util = "0.3.0"
 log = "0.4.0"
 thiserror = "1.0.0"
