@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     fmt, io,
     net::SocketAddr,
     pin::Pin,
@@ -35,8 +35,8 @@ pub struct UtpStream {
     seq_number: u16,
     ack_number: u16,
     outbound_packets: Arc<RwLock<VecDeque<Packet>>>,
-    sent_packets: Arc<RwLock<VecDeque<Packet>>>,
-    received_packets: Arc<RwLock<VecDeque<Packet>>>,
+    sent_packets: Arc<RwLock<BTreeMap<u16, Packet>>>,
+    received_packets: Arc<RwLock<BTreeMap<u16, Packet>>>,
     received_data: BytesMut,
 }
 
@@ -49,8 +49,8 @@ impl UtpStream {
         seq_number: u16,
         ack_number: u16,
         outbound_packets: Arc<RwLock<VecDeque<Packet>>>,
-        sent_packets: Arc<RwLock<VecDeque<Packet>>>,
-        received_packets: Arc<RwLock<VecDeque<Packet>>>,
+        sent_packets: Arc<RwLock<BTreeMap<u16, Packet>>>,
+        received_packets: Arc<RwLock<BTreeMap<u16, Packet>>>,
         received_data: BytesMut,
     ) -> Self {
         Self {
@@ -154,13 +154,26 @@ impl UtpStream {
         match packet.packet_type {
             PacketType::Data => {
                 // Only ACK if this packet follows the previous one
-                if packet.seq_number == self.ack_number + 1 {
+                if packet.seq_number == self.ack_number.wrapping_add(1) {
                     self.ack_number = packet.seq_number;
                 }
-                self.received_packets.write().unwrap().push_back(packet);
+
+                // TODO: What if we've already recieved a packet with this seq number?
+                self.received_packets
+                    .write()
+                    .unwrap()
+                    .insert(packet.seq_number, packet);
+
                 self.send_ack().await?;
             }
-            PacketType::State => {}
+            PacketType::State => {
+                // TODO: What if the ack number doesn't match any seq number we have?
+                self.sent_packets
+                    .write()
+                    .unwrap()
+                    .remove(&packet.ack_number)
+                    .unwrap();
+            }
             _ => {}
         }
 
@@ -168,6 +181,7 @@ impl UtpStream {
     }
 
     async fn send_ack(&mut self) -> Result<()> {
+        // TODO: Selective ack w/ any later packets we've recieved
         // TODO: Use actual values for packet fields
         #[rustfmt::skip]
         let ack = Packet::new(PacketType::State, 1, self.connection_id_send, 0, 0, 0, 0,
@@ -224,7 +238,10 @@ impl UtpStream {
                     return Poll::Ready(Err(err));
                 }
                 Poll::Ready(Ok(_)) => {
-                    self.sent_packets.write().unwrap().push_back(packet);
+                    self.sent_packets
+                        .write()
+                        .unwrap()
+                        .insert(packet.seq_number, packet);
                 }
             }
         }
