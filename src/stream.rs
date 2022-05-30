@@ -153,6 +153,13 @@ impl UtpStream {
             self.connection_id_recv, packet.packet_type, self.remote_addr
         );
 
+        self.handle_packet(packet);
+        self.send_ack().await?;
+
+        Ok(())
+    }
+
+    fn handle_packet(&mut self, packet: Packet) {
         match packet.packet_type {
             PacketType::Data => {
                 // Only ACK if this packet follows the one we last ACKed
@@ -165,8 +172,6 @@ impl UtpStream {
                     .write()
                     .unwrap()
                     .insert(packet.seq_number, packet);
-
-                self.send_ack().await?;
             }
             PacketType::State => {
                 // TODO: Track duplicate ACK count - if it hits 3, ack_number + 1 must have been lost
@@ -178,15 +183,13 @@ impl UtpStream {
             }
             _ => {}
         }
-
-        Ok(())
     }
 
     async fn send_ack(&mut self) -> Result<()> {
         // TODO: Selective ACK w/ any later packets we've recieved
         // TODO: Use actual values for packet fields
         #[rustfmt::skip]
-        let ack = Packet::new(PacketType::State, 1, self.connection_id_send, 0, 0, 0, 
+        let ack = Packet::new(PacketType::State, 1, self.connection_id_send, 0, 0, 0,
                               self.seq_number, self.ack_number, vec![], Bytes::new());
         self.outbound_packets.write().unwrap().push_back(ack);
         // TODO: This will send all packets waiting in the outbound buffer. Is this the
