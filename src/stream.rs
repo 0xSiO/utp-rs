@@ -151,23 +151,31 @@ impl UtpStream {
             self.connection_id_recv, packet.packet_type, self.remote_addr
         );
 
-        // Reply with State if we received a Data
         match packet.packet_type {
             PacketType::Data => {
-                // TODO: Use actual values for packet fields
-                #[rustfmt::skip]
-                let ack = Packet::new(PacketType::State, 1, self.connection_id_send, 0, 0, 0, 0,
-                                      packet.seq_number, vec![], Bytes::new());
-                self.outbound_packets.write().unwrap().push_back(ack);
-                // TODO: This will send all packets waiting in the outbound buffer. Is this the
-                //       behavior we want?
-                self.flush().await?;
+                // Only ACK if this packet follows the previous one
+                if packet.seq_number == self.ack_number + 1 {
+                    self.ack_number = packet.seq_number;
+                }
+                self.received_packets.write().unwrap().push_back(packet);
+                self.send_ack().await?;
             }
+            PacketType::State => {}
             _ => {}
         }
 
-        self.received_packets.write().unwrap().push_back(packet);
+        Ok(())
+    }
 
+    async fn send_ack(&mut self) -> Result<()> {
+        // TODO: Use actual values for packet fields
+        #[rustfmt::skip]
+        let ack = Packet::new(PacketType::State, 1, self.connection_id_send, 0, 0, 0, 0,
+                              self.ack_number, vec![], Bytes::new());
+        self.outbound_packets.write().unwrap().push_back(ack);
+        // TODO: This will send all packets waiting in the outbound buffer. Is this the
+        //       behavior we want?
+        self.flush().await?;
         Ok(())
     }
 
