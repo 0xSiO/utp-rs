@@ -137,6 +137,8 @@ impl UtpStream {
         self.remote_addr
     }
 
+    // TODO: Not sure what exactly this does yet - maybe read a data packet? Stream the data in the
+    // received_data buffer?
     pub async fn recv(&mut self) -> Result<()> {
         // TODO: Handle this more gracefully
         let packet = self
@@ -153,12 +155,12 @@ impl UtpStream {
 
         match packet.packet_type {
             PacketType::Data => {
-                // Only ACK if this packet follows the previous one
+                // Only ACK if this packet follows the one we last ACKed
                 if packet.seq_number == self.ack_number.wrapping_add(1) {
                     self.ack_number = packet.seq_number;
                 }
 
-                // TODO: What if we've already recieved a packet with this seq number?
+                // TODO: What if we've already recieved a packet with this seq_number?
                 self.received_packets
                     .write()
                     .unwrap()
@@ -167,7 +169,7 @@ impl UtpStream {
                 self.send_ack().await?;
             }
             PacketType::State => {
-                // TODO: What if the ack number doesn't match any seq number we have?
+                // TODO: Track duplicate ACK count - if it hits 3, ack_number + 1 must have been lost
                 self.sent_packets
                     .write()
                     .unwrap()
@@ -181,11 +183,11 @@ impl UtpStream {
     }
 
     async fn send_ack(&mut self) -> Result<()> {
-        // TODO: Selective ack w/ any later packets we've recieved
+        // TODO: Selective ACK w/ any later packets we've recieved
         // TODO: Use actual values for packet fields
         #[rustfmt::skip]
-        let ack = Packet::new(PacketType::State, 1, self.connection_id_send, 0, 0, 0, 0,
-                              self.ack_number, vec![], Bytes::new());
+        let ack = Packet::new(PacketType::State, 1, self.connection_id_send, 0, 0, 0, 
+                              self.seq_number, self.ack_number, vec![], Bytes::new());
         self.outbound_packets.write().unwrap().push_back(ack);
         // TODO: This will send all packets waiting in the outbound buffer. Is this the
         //       behavior we want?
