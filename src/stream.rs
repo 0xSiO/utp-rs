@@ -24,6 +24,43 @@ use crate::{
 pub(crate) const MAX_DATA_SEGMENT_SIZE: usize =
     crate::socket::MAX_DATAGRAM_SIZE - crate::packet::PACKET_HEADER_LEN;
 
+// Sketch of functionality:
+//
+// We can worry about selective ACK later, for now just ACK incoming packets and process ACKs for
+// sent packets one by one.
+//
+// For reading, we will be receiving data packets and sending ACKs.
+//
+// For poll_read, use the following algorithm:
+//   1. Return Poll::Ready with data from self.received_data if there's any data in the buffer
+//   2. Check inbound data packet buffer to see if there's one w/ seq_number = self.ack_number + 1
+//     2a. If so, update self.ack_number and add the data to the self.received_data buffer
+//     2b. (selective ACK) Add data from any other packets in the buffer with consecutive
+//         seq_numbers
+//   3. Poll the socket for a new packet and perform the following:
+//     3a. If pending, poll_send an ACK for the last received data packet
+//     3b. If we got a data packet, add to the data packet buffer
+//     3c. If we got a state packet, we must have sent some data earlier. Add it to
+//         self.inbound_acks so poll_flush can use it
+//   4. Go to step 1
+//
+// For writing, we will be sending data packets and receiving ACKs.
+//
+// For poll_write, break up data into chunks and add to self.outbound_data, a Vec<Bytes>.
+// For poll_flush, use the following algorithm:
+//   1. Return Poll::Ready if self.outbound_data is empty
+//   2. Check inbound ACK packet buffer to see if there's one w/ ack_number = self.seq_number
+//     2a. If so, remove the first chunk from self.outbound_data and increment self.seq_number
+//     2b. Remove more chunks if there are more ACK packets (or any in the selective ACK extension)
+//   3. Poll the socket for a new packet and perform the following:
+//     3a. If pending, poll_send the first chunk in self.outbound_data to the remote address
+//     3b. If we got a state packet, add it to the incoming ACK buffer
+//     3c. If we got a data packet, we must be in the middle of receiving some data as well. Add it
+//         to self.inbound_data so poll_read can use it
+//   4. Go to step 1
+//
+// TODO: poll_shutdown
+//
 // TODO: Need to figure out a plan to deal with lost packets
 #[allow(dead_code)]
 pub struct UtpStream {
