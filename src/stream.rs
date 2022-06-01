@@ -1,17 +1,16 @@
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::BTreeMap,
     fmt, io,
     net::SocketAddr,
     pin::Pin,
-    sync::{Arc, RwLock},
+    sync::Arc,
     task::{Context, Poll},
 };
 
 use bytes::{Bytes, BytesMut};
-use futures_util::stream::TryStreamExt;
-use log::debug;
+use futures_util::{ready, stream::TryStreamExt};
 use tokio::{
-    io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf},
+    io::{AsyncRead, AsyncWrite, ReadBuf},
     net::{lookup_host, ToSocketAddrs},
 };
 
@@ -28,21 +27,6 @@ pub(crate) const MAX_DATA_SEGMENT_SIZE: usize =
 //
 // We can worry about selective ACK later, for now just ACK incoming packets and process ACKs for
 // sent packets one by one.
-//
-// For reading, we will be receiving data packets and sending ACKs.
-//
-// For poll_read, use the following algorithm:
-//   1. Return Poll::Ready with data from self.received_data if there's any data in the buffer
-//   2. Check inbound data packet buffer to see if there's one w/ seq_number = self.ack_number + 1
-//     2a. If so, update self.ack_number and add the data to the self.received_data buffer
-//     2b. (selective ACK) Add data from any other packets in the buffer with consecutive
-//         seq_numbers
-//   3. Poll the socket for a new packet and perform the following:
-//     3a. If pending, poll_send an ACK for the last received data packet
-//     3b. If we got a data packet, add to the data packet buffer
-//     3c. If we got a state packet, we must have sent some data earlier. Add it to
-//         self.inbound_acks so poll_flush can use it
-//   4. Go to step 1
 //
 // For writing, we will be sending data packets and receiving ACKs.
 //
@@ -68,13 +52,15 @@ pub struct UtpStream {
     connection_id_recv: u16,
     connection_id_send: u16,
     remote_addr: SocketAddr,
-    // TODO: Track connection state
+    // TODO: Track connection state (connected, shutdown, etc.)
     seq_number: u16,
     ack_number: u16,
-    outbound_packets: Arc<RwLock<VecDeque<Packet>>>,
-    sent_packets: Arc<RwLock<BTreeMap<u16, Packet>>>,
-    received_packets: Arc<RwLock<BTreeMap<u16, Packet>>>,
+    // TODO: Might be able to just use HashMap
+    inbound_data: BTreeMap<u16, Bytes>,
     received_data: BytesMut,
+    outbound_data: Vec<Bytes>,
+    // TODO: Might be able to just use HashMap
+    inbound_acks: BTreeMap<u16, Packet>,
 }
 
 impl UtpStream {
@@ -85,10 +71,10 @@ impl UtpStream {
         remote_addr: SocketAddr,
         seq_number: u16,
         ack_number: u16,
-        outbound_packets: Arc<RwLock<VecDeque<Packet>>>,
-        sent_packets: Arc<RwLock<BTreeMap<u16, Packet>>>,
-        received_packets: Arc<RwLock<BTreeMap<u16, Packet>>>,
+        inbound_data: BTreeMap<u16, Bytes>,
         received_data: BytesMut,
+        outbound_data: Vec<Bytes>,
+        inbound_acks: BTreeMap<u16, Packet>,
     ) -> Self {
         Self {
             socket,
@@ -97,10 +83,10 @@ impl UtpStream {
             remote_addr,
             seq_number,
             ack_number,
-            outbound_packets,
-            sent_packets,
-            received_packets,
+            inbound_data,
             received_data,
+            outbound_data,
+            inbound_acks,
         }
     }
 
@@ -173,122 +159,6 @@ impl UtpStream {
     pub fn remote_addr(&self) -> SocketAddr {
         self.remote_addr
     }
-
-    // TODO: Not sure what exactly this does yet - maybe read a data packet? Stream the data in the
-    // received_data buffer?
-    pub async fn recv(&mut self) -> Result<()> {
-        // TODO: Handle this more gracefully
-        let packet = self
-            .socket
-            .packets(self.connection_id_recv, self.remote_addr)
-            .try_next()
-            .await?
-            .unwrap();
-
-        debug!(
-            "connection {} received {:?} from {}",
-            self.connection_id_recv, packet.packet_type, self.remote_addr
-        );
-
-        self.handle_packet(packet);
-        self.send_ack().await?;
-
-        Ok(())
-    }
-
-    fn handle_packet(&mut self, packet: Packet) {
-        match packet.packet_type {
-            PacketType::Data => {
-                // Only ACK if this packet follows the one we last ACKed
-                if packet.seq_number == self.ack_number.wrapping_add(1) {
-                    self.ack_number = packet.seq_number;
-                }
-
-                // TODO: What if we've already recieved a packet with this seq_number?
-                self.received_packets
-                    .write()
-                    .unwrap()
-                    .insert(packet.seq_number, packet);
-            }
-            PacketType::State => {
-                // TODO: Track duplicate ACK count - if it hits 3, ack_number + 1 must have been lost
-                self.sent_packets
-                    .write()
-                    .unwrap()
-                    .remove(&packet.ack_number)
-                    .unwrap();
-            }
-            _ => {}
-        }
-    }
-
-    async fn send_ack(&mut self) -> Result<()> {
-        // TODO: Selective ACK w/ any later packets we've recieved
-        // TODO: Use actual values for packet fields
-        #[rustfmt::skip]
-        let ack = Packet::new(PacketType::State, 1, self.connection_id_send, 0, 0, 0,
-                              self.seq_number, self.ack_number, vec![], Bytes::new());
-        self.outbound_packets.write().unwrap().push_back(ack);
-        // TODO: This will send all packets waiting in the outbound buffer. Is this the
-        //       behavior we want?
-        self.flush().await?;
-        Ok(())
-    }
-
-    fn poll_read_priv(
-        &mut self,
-        _cx: &mut Context<'_>,
-        _buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        todo!()
-    }
-
-    /// Chunk the given data into MAX_DATA_SEGMENT_SIZE and place in the outbound packet buffer.
-    fn poll_write_priv(&mut self, _cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
-        let mut outbound_packets = self.outbound_packets.write().unwrap();
-        // TODO: Don't copy each chunk, use Bytes::split_to to get the bytes for each packet
-        buf.chunks(MAX_DATA_SEGMENT_SIZE).for_each(|chunk| {
-            // TODO: Use actual values for packet fields
-            #[rustfmt::skip]
-            let packet = Packet::new(PacketType::Data, 1, self.connection_id_send, 0, 0, 0, 0, 0,
-                                     vec![], Bytes::copy_from_slice(chunk));
-            outbound_packets.push_back(packet);
-        });
-        Poll::Ready(Ok(buf.len()))
-    }
-
-    /// Flush the outbound packet buffer by sending each packet to the remote address, retrying on
-    /// failure if possible, until there are no more outbound packets.
-    fn poll_flush_priv(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        // TODO: We should be able to send these concurrently
-        while let Some(packet) = self.outbound_packets.write().unwrap().pop_front() {
-            match self
-                .socket
-                .poll_send_to(cx, packet.clone(), self.remote_addr)
-            {
-                Poll::Pending => {
-                    self.outbound_packets.write().unwrap().push_front(packet);
-                    return Poll::Pending;
-                }
-                // TODO: Limit number of retries?
-                Poll::Ready(Err(err)) if err.kind() == io::ErrorKind::Interrupted => {
-                    self.outbound_packets.write().unwrap().push_front(packet);
-                    continue;
-                }
-                Poll::Ready(Err(err)) => {
-                    self.outbound_packets.write().unwrap().push_front(packet);
-                    return Poll::Ready(Err(err));
-                }
-                Poll::Ready(Ok(_)) => {
-                    self.sent_packets
-                        .write()
-                        .unwrap()
-                        .insert(packet.seq_number, packet);
-                }
-            }
-        }
-        Poll::Ready(Ok(()))
-    }
 }
 
 impl fmt::Debug for UtpStream {
@@ -303,31 +173,106 @@ impl fmt::Debug for UtpStream {
 }
 
 impl AsyncRead for UtpStream {
+    // For reading, we will be receiving data packets and sending ACKs.
+    // We use the following algorithm:
+    //   1. Return Poll::Ready with data from self.received_data if there's any data in the buffer
+    //   2. Check inbound packet buffer to see if there's one w/ seq_number = self.ack_number + 1
+    //     2a. If so, update self.ack_number and add the data to the self.received_data buffer
+    //     2b. (selective ACK) Add data from any other packets in the buffer with consecutive
+    //         seq_numbers?
+    //   3. Poll the socket for a new packet and perform the following:
+    //     3a. If pending, poll_send an ACK for the last received data packet
+    //     3b. If we got a data packet, add to the data packet buffer
+    //     3c. If we got a state packet, we must have sent some data earlier. Add it to
+    //         self.inbound_acks so poll_flush can use it
+    //   4. Go to step 1
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        self.poll_read_priv(cx, buf)
+        loop {
+            // 1. If we have data sitting in our buffer, write to buf and return Poll::Ready
+            if !self.received_data.is_empty() {
+                let chunk = if self.received_data.len() > buf.remaining() {
+                    self.received_data.split_to(buf.remaining())
+                } else {
+                    self.received_data.split()
+                };
+
+                debug_assert!(chunk.len() <= buf.remaining());
+                buf.put_slice(&chunk);
+                return Poll::Ready(Ok(()));
+            }
+
+            // 2. We don't have any data right now, so check the inbound data packet buffer
+            let expected_seq_num = self.ack_number.wrapping_add(1);
+            if let Some(chunk) = self.inbound_data.remove(&expected_seq_num) {
+                // Nice, grab the data and go back to step 1
+                self.ack_number = expected_seq_num;
+                self.received_data.extend_from_slice(&chunk);
+                continue;
+            }
+
+            // 3. We have no inbound or received data, so poll for a packet
+            let maybe_next_packet = self
+                .socket
+                .packets(self.connection_id_recv(), self.remote_addr())
+                .try_poll_next_unpin(cx);
+            match maybe_next_packet {
+                Poll::Pending => {
+                    // No packets available yet. Try ACKing the last packet we expected to receive
+                    ready!(self.socket.poll_send_to(cx, todo!(), self.remote_addr()))?;
+                }
+                Poll::Ready(Some(result)) => {
+                    let packet = result?;
+                    match packet.packet_type {
+                        PacketType::Data => {
+                            // Save the new packet
+
+                            // TODO: What if we already have this packet?
+                            self.inbound_data.insert(packet.seq_number, packet.data);
+                        }
+                        PacketType::State => {
+                            // Must be in the middle of flushing, add this to inbound_acks so
+                            // poll_flush can use it.
+
+                            // TODO: What if we already have this packet?
+                            self.inbound_acks.insert(packet.seq_number, packet);
+                        }
+                        _ => {
+                            // TODO: Respond to other packet types
+                            todo!()
+                        }
+                    }
+                }
+                Poll::Ready(None) => {
+                    // The stream has terminated, so indicate EOF
+                    return Poll::Ready(Ok(()));
+                }
+            }
+
+            // 4. Go back to step 1
+        }
     }
 }
 
 impl AsyncWrite for UtpStream {
     fn poll_write(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        self.poll_write_priv(cx, buf)
+        todo!()
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.poll_flush_priv(cx)
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        todo!()
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         // TODO: We could set a shutdown flag on UtpStream and return Ok(0) for any future calls to
         //       poll_write, effectively preventing any more packets from being sent
-        self.poll_flush(cx)
+        todo!()
     }
 }
