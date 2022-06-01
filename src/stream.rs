@@ -5,6 +5,7 @@ use std::{
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use bytes::{Bytes, BytesMut};
@@ -17,7 +18,7 @@ use tokio::{
 
 use crate::{
     error::*,
-    packet::{Packet, PacketType},
+    packet::{Extension, Packet, PacketType},
     socket::UtpSocket,
 };
 
@@ -136,6 +137,31 @@ impl UtpStream {
         self.remote_addr
     }
 
+    fn poll_send_packet(
+        &self,
+        cx: &mut Context<'_>,
+        packet_type: PacketType,
+        seq_number: u16,
+        ack_number: u16,
+        extensions: Vec<Extension>,
+        data: Bytes,
+    ) -> Poll<io::Result<()>> {
+        let now = SystemTime::now();
+        let total_microseconds = now.duration_since(UNIX_EPOCH).unwrap().as_micros();
+        // We really only need the last 32 bits of the current time. This is meant to measure
+        // delays between sender and receiver, and u32::MAX microseconds is about 72 minutes,
+        // which should be more than enough to measure a one-way transmission delay.
+        let truncated_microseconds = (total_microseconds & u32::MAX as u128) as u32;
+
+        // TODO: Fill out the rest of the packet fields
+        #[rustfmt::skip]
+        let packet = Packet::new(packet_type, 1, self.connection_id_send(), truncated_microseconds,
+                                 0, 0, seq_number, ack_number, extensions, data);
+        let _bytes_sent = ready!(self.socket.poll_send_to(cx, packet, self.remote_addr()))?;
+        // TODO: Add bytes sent to current window
+        Poll::Ready(Ok(()))
+    }
+
     fn handle_packet(&mut self, packet: Packet) {
         debug!("Handling inbound packet: {:?}", packet);
         match packet.packet_type {
@@ -159,43 +185,25 @@ impl UtpStream {
     }
 
     fn poll_send_ack(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        // TODO: Figure out timestamp, timestamp_delta, and receive window size
-        let packet = Packet::new(
+        self.poll_send_packet(
+            cx,
             PacketType::State,
-            1,
-            self.connection_id_send(),
-            0,
-            0,
-            0,
             self.seq_number,
             self.ack_number,
             vec![],
             Bytes::new(),
-        );
-
-        // TODO: Add sent bytes to current window size
-        let _ = ready!(self.socket.poll_send_to(cx, packet, self.remote_addr()))?;
-        Poll::Ready(Ok(()))
+        )
     }
 
     fn poll_send_data(&self, cx: &mut Context<'_>, data: Bytes) -> Poll<io::Result<()>> {
-        // TODO: Figure out timestamp, timestamp_delta, and receive window size
-        let packet = Packet::new(
+        self.poll_send_packet(
+            cx,
             PacketType::Data,
-            1,
-            self.connection_id_send(),
-            0,
-            0,
-            0,
             self.seq_number,
             self.ack_number,
             vec![],
             data,
-        );
-
-        // TODO: Add sent bytes to current window size
-        let _ = ready!(self.socket.poll_send_to(cx, packet, self.remote_addr()))?;
-        Poll::Ready(Ok(()))
+        )
     }
 }
 
@@ -210,73 +218,18 @@ impl fmt::Debug for UtpStream {
     }
 }
 
+// TODO: Do some more research on how packets should actually be sent/received :)
+
 impl AsyncRead for UtpStream {
-    // For reading, we will be receiving data packets and sending ACKs.
-    // We use the following algorithm:
-    //   1. Return Poll::Ready with data from self.received_data if there's any data in the buffer
-    //   2. Check inbound packet buffer to see if there's one w/ seq_number = self.ack_number + 1
-    //     2a. If so, update self.ack_number and add the data to the self.received_data buffer
-    //   3. Poll the socket for a new packet and perform the following:
-    //     3a. If pending, poll_send an ACK for the last received data packet
-    //     3b. If we got a packet, handle it or save it to the correct buffer depending on its type
-    //   4. Go to step 1
     fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        _buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        loop {
-            // 1. If we have data sitting in our buffer, write to buf and return Poll::Ready
-            if !self.received_data.is_empty() {
-                let chunk = if self.received_data.len() > buf.remaining() {
-                    self.received_data.split_to(buf.remaining())
-                } else {
-                    self.received_data.split()
-                };
-
-                debug_assert!(chunk.len() <= buf.remaining());
-                buf.put_slice(&chunk);
-                return Poll::Ready(Ok(()));
-            }
-
-            // 2. We don't have any data right now, so check the inbound data packet buffer
-            let expected_seq_num = self.ack_number.wrapping_add(1);
-            debug!(
-                "Reader expecting seq_number {} (self.seq_number = {}, self.ack_number = {})",
-                expected_seq_num, self.seq_number, self.ack_number
-            );
-            if let Some(chunk) = self.inbound_data.remove(&expected_seq_num) {
-                // Nice, grab the data and go back to step 1
-                self.ack_number = expected_seq_num;
-                self.received_data.extend_from_slice(&chunk);
-                continue;
-            }
-
-            // 3. We have no inbound or received data, so poll for a packet
-            let maybe_next_packet = self
-                .socket
-                .packets(self.connection_id_recv(), self.remote_addr())
-                .try_poll_next_unpin(cx);
-            match maybe_next_packet {
-                Poll::Pending => {
-                    // No packets available yet. Try ACKing the last packet we expected to receive
-                    // TODO: Remove this once I'm done debugging :)
-                    std::thread::sleep_ms(500);
-                    ready!(self.poll_send_ack(cx))?;
-                }
-                Poll::Ready(Some(result)) => self.handle_packet(result?),
-                Poll::Ready(None) => {
-                    // The stream has terminated, so indicate EOF
-                    return Poll::Ready(Ok(()));
-                }
-            }
-
-            // 4. Go back to step 1
-        }
+        todo!()
     }
 }
 
-// TODO: Do some more research on how packets should actually be sent/received :)
 impl AsyncWrite for UtpStream {
     fn poll_write(
         mut self: Pin<&mut Self>,
@@ -291,60 +244,9 @@ impl AsyncWrite for UtpStream {
         Poll::Ready(Ok(buf.len()))
     }
 
-    // For writing, we will be sending data packets and receiving ACKs.
-    // We use the following algorithm:
-    //   1. Return Poll::Ready if self.outbound_data is empty
-    //   2. Check inbound ACK packet buffer to see if there's one w/ ack_number = self.seq_number
-    //     2a. If so, remove the first chunk from self.outbound_data and increment self.seq_number
-    //   3. Poll the socket for a new packet and perform the following:
-    //     3a. If pending, poll_send the first chunk in self.outbound_data to the remote address
-    //     3b. If we got a packet, handle it or save it to the correct buffer depending on its type
-    //   4. Go to step 1
-    //
     // TODO: Any extra required logic to deal with duplicate ACKs and lost packets
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        loop {
-            // 1. If we have no more outbound data, we're finished
-            if self.outbound_data.is_empty() {
-                return Poll::Ready(Ok(()));
-            }
-
-            // 2. We still have unACKed packets, so check to see if we've received any ACKs
-            let expected_ack_num = self.seq_number;
-            debug!(
-                "Writer expecting ack_number {} (self.seq_number = {}, self.ack_number = {})",
-                expected_ack_num, self.seq_number, self.ack_number
-            );
-            if let Some(_packet) = self.inbound_acks.remove(&expected_ack_num) {
-                // Nice, remove the next chunk from our queue and go back to step 1
-                self.seq_number = self.seq_number.wrapping_add(1);
-                self.outbound_data.pop_front();
-                continue;
-            }
-
-            // 3. No ACKs yet for the next packet, so poll for a new packet
-            let maybe_next_packet = self
-                .socket
-                .packets(self.connection_id_recv(), self.remote_addr())
-                .try_poll_next_unpin(cx);
-            match maybe_next_packet {
-                Poll::Pending => {
-                    // No packets available yet. Try sending the next packet in the outbound queue
-                    // Ok to unwrap, at this point outbound_data should not be empty
-                    let data = self.outbound_data.front().unwrap().clone();
-                    // TODO: Remove this once I'm done debugging :)
-                    std::thread::sleep_ms(500);
-                    ready!(self.poll_send_data(cx, data))?;
-                }
-                Poll::Ready(Some(result)) => self.handle_packet(result?),
-                Poll::Ready(None) => {
-                    // TODO: Stream has terminated, return an error?
-                    todo!()
-                }
-            }
-
-            // 4. Go back to step 1
-        }
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        todo!()
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
