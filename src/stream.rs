@@ -9,6 +9,7 @@ use std::{
 
 use bytes::{Bytes, BytesMut};
 use futures_util::{ready, stream::TryStreamExt};
+use log::debug;
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     net::{lookup_host, ToSocketAddrs},
@@ -136,6 +137,7 @@ impl UtpStream {
     }
 
     fn handle_packet(&mut self, packet: Packet) {
+        debug!("Handling inbound packet: {:?}", packet);
         match packet.packet_type {
             PacketType::Data => {
                 // Queue up the data packet to be processed during poll_read
@@ -147,7 +149,7 @@ impl UtpStream {
                 // Queue up the ACK to be processed during poll_flush
 
                 // TODO: What if we already have this packet?
-                self.inbound_acks.insert(packet.seq_number, packet);
+                self.inbound_acks.insert(packet.ack_number, packet);
             }
             _ => {
                 // TODO: Respond to other packet types
@@ -239,6 +241,10 @@ impl AsyncRead for UtpStream {
 
             // 2. We don't have any data right now, so check the inbound data packet buffer
             let expected_seq_num = self.ack_number.wrapping_add(1);
+            debug!(
+                "Reader expecting seq_number {} (self.seq_number = {}, self.ack_number = {})",
+                expected_seq_num, self.seq_number, self.ack_number
+            );
             if let Some(chunk) = self.inbound_data.remove(&expected_seq_num) {
                 // Nice, grab the data and go back to step 1
                 self.ack_number = expected_seq_num;
@@ -254,6 +260,8 @@ impl AsyncRead for UtpStream {
             match maybe_next_packet {
                 Poll::Pending => {
                     // No packets available yet. Try ACKing the last packet we expected to receive
+                    // TODO: Remove this once I'm done debugging :)
+                    std::thread::sleep_ms(500);
                     ready!(self.poll_send_ack(cx))?;
                 }
                 Poll::Ready(Some(result)) => self.handle_packet(result?),
@@ -268,6 +276,7 @@ impl AsyncRead for UtpStream {
     }
 }
 
+// TODO: Do some more research on how packets should actually be sent/received :)
 impl AsyncWrite for UtpStream {
     fn poll_write(
         mut self: Pin<&mut Self>,
@@ -302,6 +311,10 @@ impl AsyncWrite for UtpStream {
 
             // 2. We still have unACKed packets, so check to see if we've received any ACKs
             let expected_ack_num = self.seq_number;
+            debug!(
+                "Writer expecting ack_number {} (self.seq_number = {}, self.ack_number = {})",
+                expected_ack_num, self.seq_number, self.ack_number
+            );
             if let Some(_packet) = self.inbound_acks.remove(&expected_ack_num) {
                 // Nice, remove the next chunk from our queue and go back to step 1
                 self.seq_number = self.seq_number.wrapping_add(1);
@@ -319,6 +332,8 @@ impl AsyncWrite for UtpStream {
                     // No packets available yet. Try sending the next packet in the outbound queue
                     // Ok to unwrap, at this point outbound_data should not be empty
                     let data = self.outbound_data.front().unwrap().clone();
+                    // TODO: Remove this once I'm done debugging :)
+                    std::thread::sleep_ms(500);
                     ready!(self.poll_send_data(cx, data))?;
                 }
                 Poll::Ready(Some(result)) => self.handle_packet(result?),

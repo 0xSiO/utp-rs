@@ -137,32 +137,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn data_and_ack_test() {
+        init_logger();
+
+        let local_socket = get_socket().await;
+        let remote_socket = get_socket().await;
+
+        let (stream_1, stream_2) =
+            get_connection_pair(Arc::clone(&local_socket), Arc::clone(&remote_socket)).await;
+
+        debug!("starting test");
+
+        #[rustfmt::skip]
+        let data_packet = Packet::new(PacketType::Data, 1, stream_1.connection_id_send(), 0, 0, 0, 2,
+                                 123, vec![], Bytes::from_static(&[1, 2, 3, 4, 5]));
+        local_socket
+            .send_to(data_packet.clone(), remote_socket.local_addr())
+            .await
+            .unwrap();
+
+        let received_packet = remote_socket
+            .packets(stream_2.connection_id_recv(), stream_2.remote_addr())
+            .try_next()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(received_packet.seq_number, data_packet.seq_number);
+
+        #[rustfmt::skip]
+        let ack_packet = Packet::new(PacketType::State, 1, stream_2.connection_id_send(), 0, 0, 0,
+                                     124, 2, vec![], Bytes::new());
+        remote_socket
+            .send_to(ack_packet.clone(), local_socket.local_addr())
+            .await
+            .unwrap();
+
+        let received_packet = local_socket
+            .packets(stream_1.connection_id_recv(), stream_1.remote_addr())
+            .try_next()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(received_packet.seq_number, ack_packet.seq_number);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn async_read_and_write_test() {
         init_logger();
 
         let local_socket = get_socket().await;
         let remote_socket = get_socket().await;
 
-        let (mut stream_1, mut stream_2) =
+        let (mut stream_1, stream_2) =
             get_connection_pair(Arc::clone(&local_socket), Arc::clone(&remote_socket)).await;
 
         // Send/receive 1 packet of data
-        let message = [1_u8; MAX_DATA_SEGMENT_SIZE];
+        let message = [1_u8; 5];
         stream_1.write_all(&message).await.unwrap();
-        let mut buf = [0; MAX_DATA_SEGMENT_SIZE];
-        let ((), bytes_read) =
-            tokio::try_join!(stream_1.flush(), stream_2.read_exact(&mut buf)).unwrap();
-        assert_eq!(bytes_read, message.len());
-        assert_eq!(buf, message);
+        debug!("starting tasks");
+        let write_task = tokio::spawn(async move { stream_1.flush().await.unwrap() });
+        let read_task = tokio::spawn(async move {
+            let packet = remote_socket
+                .packets(stream_2.connection_id_recv(), stream_2.remote_addr())
+                .try_next()
+                .await
+                .unwrap()
+                .unwrap();
 
-        // Send/receive multiple packets of data
-        const NUM_PACKETS: usize = 4;
-        let large_message = [1_u8; MAX_DATA_SEGMENT_SIZE * NUM_PACKETS];
-        stream_1.write_all(&large_message).await.unwrap();
-        let mut large_buf = [0; MAX_DATA_SEGMENT_SIZE * NUM_PACKETS];
-        let ((), bytes_read) =
-            tokio::try_join!(stream_1.flush(), stream_2.read_exact(&mut large_buf)).unwrap();
-        assert_eq!(bytes_read, large_message.len());
-        assert_eq!(large_buf, large_message);
+            assert_eq!(packet.data.as_ref(), &message);
+
+            // Somehow this works
+            #[rustfmt::skip]
+            let ack_packet = Packet::new(PacketType::State, 1, stream_2.connection_id_send(), 0, 0,
+                                         0, packet.ack_number + 1, packet.seq_number, vec![], Bytes::new());
+
+            remote_socket
+                .send_to(ack_packet, stream_2.remote_addr())
+                .await
+                .unwrap();
+        });
+        let ((), ()) = tokio::try_join!(write_task, read_task).unwrap();
+
+        //     // Send/receive multiple packets of data
+        //     const NUM_PACKETS: usize = 4;
+        //     let large_message = [1_u8; MAX_DATA_SEGMENT_SIZE * NUM_PACKETS];
+        //     stream_1.write_all(&large_message).await.unwrap();
+        //     let mut large_buf = [0; MAX_DATA_SEGMENT_SIZE * NUM_PACKETS];
+        //     let ((), bytes_read) =
+        //         tokio::try_join!(stream_1.flush(), stream_2.read_exact(&mut large_buf)).unwrap();
+        //     assert_eq!(bytes_read, large_message.len());
+        //     assert_eq!(large_buf, large_message);
     }
 }

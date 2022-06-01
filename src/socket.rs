@@ -99,11 +99,12 @@ impl UtpSocket {
         remote_addr: SocketAddr,
     ) -> Poll<io::Result<usize>> {
         let datagram = Bytes::from(packet.clone());
-        let bytes_written = ready!(self.socket.poll_send_to(cx, &datagram, remote_addr))?;
+        let bytes_written = ready!(dbg!(self.socket.poll_send_to(cx, &datagram, remote_addr)))?;
         debug!(
             "Conn #{}: {} -> {} {:?} ({} bytes)",
             packet.connection_id, self.local_addr, remote_addr, packet.packet_type, bytes_written
         );
+        debug!("{:?}", packet);
         debug_assert_eq!(bytes_written, datagram.len());
         Poll::Ready(Ok(bytes_written))
     }
@@ -126,7 +127,7 @@ impl UtpSocket {
     fn poll_recv_from(&self, cx: &mut Context<'_>) -> Poll<io::Result<(Packet, SocketAddr)>> {
         let mut buf = [0; MAX_DATAGRAM_SIZE];
         let mut buf = ReadBuf::new(&mut buf);
-        let remote_addr = ready!(self.socket.poll_recv_from(cx, &mut buf))?;
+        let remote_addr = ready!(dbg!(self.socket.poll_recv_from(cx, &mut buf)))?;
         let packet = Packet::try_from(Bytes::copy_from_slice(buf.filled()))
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         debug!(
@@ -269,6 +270,8 @@ impl<'s> PacketStream<'s> {
             // TODO: Simplify this if statement if the else branch is never called
             unreachable!();
         }
+
+        debug!("Polling for packets from {}", self.remote_addr);
 
         if let Poll::Ready(result) = self.socket.poll_recv_from(cx) {
             let (packet, actual_addr) = result?;
