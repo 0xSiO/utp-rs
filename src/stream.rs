@@ -155,6 +155,46 @@ impl UtpStream {
             }
         }
     }
+
+    fn poll_send_ack(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        // TODO: Figure out timestamp, timestamp_delta, and receive window size
+        let packet = Packet::new(
+            PacketType::State,
+            1,
+            self.connection_id_send(),
+            0,
+            0,
+            0,
+            self.seq_number,
+            self.ack_number,
+            vec![],
+            Bytes::new(),
+        );
+
+        // TODO: Add sent bytes to current window size
+        let _ = ready!(self.socket.poll_send_to(cx, packet, self.remote_addr()))?;
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_send_data(&self, cx: &mut Context<'_>, data: Bytes) -> Poll<io::Result<()>> {
+        // TODO: Figure out timestamp, timestamp_delta, and receive window size
+        let packet = Packet::new(
+            PacketType::Data,
+            1,
+            self.connection_id_send(),
+            0,
+            0,
+            0,
+            self.seq_number,
+            self.ack_number,
+            vec![],
+            data,
+        );
+
+        // TODO: Add sent bytes to current window size
+        let _ = ready!(self.socket.poll_send_to(cx, packet, self.remote_addr()))?;
+        Poll::Ready(Ok(()))
+    }
 }
 
 impl fmt::Debug for UtpStream {
@@ -214,7 +254,7 @@ impl AsyncRead for UtpStream {
             match maybe_next_packet {
                 Poll::Pending => {
                     // No packets available yet. Try ACKing the last packet we expected to receive
-                    ready!(self.socket.poll_send_to(cx, todo!(), self.remote_addr()))?;
+                    ready!(self.poll_send_ack(cx))?;
                 }
                 Poll::Ready(Some(result)) => self.handle_packet(result?),
                 Poll::Ready(None) => {
@@ -277,7 +317,9 @@ impl AsyncWrite for UtpStream {
             match maybe_next_packet {
                 Poll::Pending => {
                     // No packets available yet. Try sending the next packet in the outbound queue
-                    ready!(self.socket.poll_send_to(cx, todo!(), self.remote_addr()))?;
+                    // Ok to unwrap, at this point outbound_data should not be empty
+                    let data = self.outbound_data.front().unwrap().clone();
+                    ready!(self.poll_send_data(cx, data))?;
                 }
                 Poll::Ready(Some(result)) => self.handle_packet(result?),
                 Poll::Ready(None) => {
