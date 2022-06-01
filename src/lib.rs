@@ -31,10 +31,11 @@ mod tests {
     use bytes::Bytes;
     use futures_util::{stream::FuturesUnordered, StreamExt, TryStreamExt};
     use log::*;
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
     use packet::{Packet, PacketType};
+    use stream::MAX_DATA_SEGMENT_SIZE;
 
     fn init_logger() {
         let _ = pretty_env_logger::try_init();
@@ -136,46 +137,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn async_write_test() {
-        init_logger();
-
-        let local_socket = get_socket().await;
-        let remote_socket = get_socket().await;
-
-        let (mut stream_1, _) =
-            get_connection_pair(Arc::clone(&local_socket), Arc::clone(&remote_socket)).await;
-
-        // Send 1 packet of data to the remote socket
-        let message = &[1_u8; crate::stream::MAX_DATA_SEGMENT_SIZE];
-        stream_1.write_all(message).await.unwrap();
-        stream_1.flush().await.unwrap();
-
-        // Check that we received a packet on the remote socket
-        let (packet, addr) = remote_socket.recv_from().await.unwrap();
-        assert_eq!(packet.data.len(), message.len());
-        assert_eq!(packet.data.as_ref(), message);
-        assert_eq!(addr, local_socket.local_addr());
-
-        // Send a larger message that should break into several packets
-        const NUM_PACKETS: usize = 4;
-        let large_message = &[1_u8; crate::stream::MAX_DATA_SEGMENT_SIZE * NUM_PACKETS];
-        stream_1.write_all(large_message).await.unwrap();
-        stream_1.flush().await.unwrap();
-
-        // Check that all the data made it to the remote socket
-        let mut result: Vec<u8> = Vec::with_capacity(large_message.len());
-        for _ in 0..NUM_PACKETS {
-            let (packet, _) = remote_socket.recv_from().await.unwrap();
-            result.extend(packet.data);
-        }
-        assert_eq!(result.len(), large_message.len());
-        // TODO: This could fail if the packets arrive out of order. Move this check to a dedicated
-        //       test instead after implementing packet re-ordering
-        assert_eq!(result, large_message);
-    }
-
-    #[tokio::test]
-    async fn ack_test() {
+    async fn async_read_and_write_test() {
         init_logger();
 
         let local_socket = get_socket().await;
@@ -184,17 +146,23 @@ mod tests {
         let (mut stream_1, mut stream_2) =
             get_connection_pair(Arc::clone(&local_socket), Arc::clone(&remote_socket)).await;
 
-        // Send some data to the remote socket
-        let message = &[1_u8; crate::stream::MAX_DATA_SEGMENT_SIZE];
-        stream_1.write_all(message).await.unwrap();
-        stream_1.flush().await.unwrap();
+        // Send/receive 1 packet of data
+        let message = [1_u8; MAX_DATA_SEGMENT_SIZE];
+        stream_1.write_all(&message).await.unwrap();
+        let mut buf = [0; MAX_DATA_SEGMENT_SIZE];
+        let ((), bytes_read) =
+            tokio::try_join!(stream_1.flush(), stream_2.read_exact(&mut buf)).unwrap();
+        assert_eq!(bytes_read, message.len());
+        assert_eq!(buf, message);
 
-        // Check that we successfully received data on the remote socket
-        assert!(stream_2.recv().await.is_ok());
-
-        // Check that the remote socket sent us back a State packet
-        let (packet, addr) = local_socket.recv_from().await.unwrap();
-        assert_eq!(packet.packet_type, PacketType::State);
-        assert_eq!(addr, remote_socket.local_addr());
+        // Send/receive multiple packets of data
+        const NUM_PACKETS: usize = 4;
+        let large_message = [1_u8; MAX_DATA_SEGMENT_SIZE * NUM_PACKETS];
+        stream_1.write_all(&large_message).await.unwrap();
+        let mut large_buf = [0; MAX_DATA_SEGMENT_SIZE * NUM_PACKETS];
+        let ((), bytes_read) =
+            tokio::try_join!(stream_1.flush(), stream_2.read_exact(&mut large_buf)).unwrap();
+        assert_eq!(bytes_read, large_message.len());
+        assert_eq!(large_buf, large_message);
     }
 }
