@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{HashMap, VecDeque},
     fmt, io,
     net::SocketAddr,
     pin::Pin,
@@ -23,28 +23,6 @@ use crate::{
 pub(crate) const MAX_DATA_SEGMENT_SIZE: usize =
     crate::socket::MAX_DATAGRAM_SIZE - crate::packet::PACKET_HEADER_LEN;
 
-// Sketch of functionality:
-//
-// We can worry about selective ACK later, for now just ACK incoming packets and process ACKs for
-// sent packets one by one.
-//
-// For writing, we will be sending data packets and receiving ACKs.
-//
-// For poll_flush, use the following algorithm:
-//   1. Return Poll::Ready if self.outbound_data is empty
-//   2. Check inbound ACK packet buffer to see if there's one w/ ack_number = self.seq_number
-//     2a. If so, remove the first chunk from self.outbound_data and increment self.seq_number
-//     2b. Remove more chunks if there are more ACK packets (or any in the selective ACK extension)
-//   3. Poll the socket for a new packet and perform the following:
-//     3a. If pending, poll_send the first chunk in self.outbound_data to the remote address
-//     3b. If we got a state packet, add it to the incoming ACK buffer
-//     3c. If we got a data packet, we must be in the middle of receiving some data as well. Add it
-//         to self.inbound_data so poll_read can use it
-//   4. Go to step 1
-//
-// TODO: poll_shutdown
-//
-// TODO: Need to figure out a plan to deal with lost packets
 #[allow(dead_code)]
 pub struct UtpStream {
     socket: Arc<UtpSocket>,
@@ -54,12 +32,10 @@ pub struct UtpStream {
     // TODO: Track connection state (connected, shutdown, etc.)
     seq_number: u16,
     ack_number: u16,
-    // TODO: Might be able to just use HashMap
-    inbound_data: BTreeMap<u16, Bytes>,
+    inbound_data: HashMap<u16, Bytes>,
     received_data: BytesMut,
-    outbound_data: Vec<Bytes>,
-    // TODO: Might be able to just use HashMap
-    inbound_acks: BTreeMap<u16, Packet>,
+    outbound_data: VecDeque<Bytes>,
+    inbound_acks: HashMap<u16, Packet>,
 }
 
 impl UtpStream {
@@ -70,10 +46,10 @@ impl UtpStream {
         remote_addr: SocketAddr,
         seq_number: u16,
         ack_number: u16,
-        inbound_data: BTreeMap<u16, Bytes>,
+        inbound_data: HashMap<u16, Bytes>,
         received_data: BytesMut,
-        outbound_data: Vec<Bytes>,
-        inbound_acks: BTreeMap<u16, Packet>,
+        outbound_data: VecDeque<Bytes>,
+        inbound_acks: HashMap<u16, Packet>,
     ) -> Self {
         Self {
             socket,
@@ -158,6 +134,27 @@ impl UtpStream {
     pub fn remote_addr(&self) -> SocketAddr {
         self.remote_addr
     }
+
+    fn handle_packet(&mut self, packet: Packet) {
+        match packet.packet_type {
+            PacketType::Data => {
+                // Queue up the data packet to be processed during poll_read
+
+                // TODO: What if we already have this packet?
+                self.inbound_data.insert(packet.seq_number, packet.data);
+            }
+            PacketType::State => {
+                // Queue up the ACK to be processed during poll_flush
+
+                // TODO: What if we already have this packet?
+                self.inbound_acks.insert(packet.seq_number, packet);
+            }
+            _ => {
+                // TODO: Respond to other packet types
+                todo!()
+            }
+        }
+    }
 }
 
 impl fmt::Debug for UtpStream {
@@ -177,13 +174,9 @@ impl AsyncRead for UtpStream {
     //   1. Return Poll::Ready with data from self.received_data if there's any data in the buffer
     //   2. Check inbound packet buffer to see if there's one w/ seq_number = self.ack_number + 1
     //     2a. If so, update self.ack_number and add the data to the self.received_data buffer
-    //     2b. (selective ACK) Add data from any other packets in the buffer with consecutive
-    //         seq_numbers?
     //   3. Poll the socket for a new packet and perform the following:
     //     3a. If pending, poll_send an ACK for the last received data packet
-    //     3b. If we got a data packet, add to the data packet buffer
-    //     3c. If we got a state packet, we must have sent some data earlier. Add it to
-    //         self.inbound_acks so poll_flush can use it
+    //     3b. If we got a packet, handle it or save it to the correct buffer depending on its type
     //   4. Go to step 1
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -223,28 +216,7 @@ impl AsyncRead for UtpStream {
                     // No packets available yet. Try ACKing the last packet we expected to receive
                     ready!(self.socket.poll_send_to(cx, todo!(), self.remote_addr()))?;
                 }
-                Poll::Ready(Some(result)) => {
-                    let packet = result?;
-                    match packet.packet_type {
-                        PacketType::Data => {
-                            // Save the new packet
-
-                            // TODO: What if we already have this packet?
-                            self.inbound_data.insert(packet.seq_number, packet.data);
-                        }
-                        PacketType::State => {
-                            // Must be in the middle of flushing, add this to inbound_acks so
-                            // poll_flush can use it.
-
-                            // TODO: What if we already have this packet?
-                            self.inbound_acks.insert(packet.seq_number, packet);
-                        }
-                        _ => {
-                            // TODO: Respond to other packet types
-                            todo!()
-                        }
-                    }
-                }
+                Poll::Ready(Some(result)) => self.handle_packet(result?),
                 Poll::Ready(None) => {
                     // The stream has terminated, so indicate EOF
                     return Poll::Ready(Ok(()));
@@ -270,11 +242,56 @@ impl AsyncWrite for UtpStream {
         Poll::Ready(Ok(buf.len()))
     }
 
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        todo!()
+    // For writing, we will be sending data packets and receiving ACKs.
+    // We use the following algorithm:
+    //   1. Return Poll::Ready if self.outbound_data is empty
+    //   2. Check inbound ACK packet buffer to see if there's one w/ ack_number = self.seq_number
+    //     2a. If so, remove the first chunk from self.outbound_data and increment self.seq_number
+    //   3. Poll the socket for a new packet and perform the following:
+    //     3a. If pending, poll_send the first chunk in self.outbound_data to the remote address
+    //     3b. If we got a packet, handle it or save it to the correct buffer depending on its type
+    //   4. Go to step 1
+    //
+    // TODO: Any extra required logic to deal with duplicate ACKs and lost packets
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        loop {
+            // 1. If we have no more outbound data, we're finished
+            if self.outbound_data.is_empty() {
+                return Poll::Ready(Ok(()));
+            }
+
+            // 2. We still have unACKed packets, so check to see if we've received any ACKs
+            let expected_ack_num = self.seq_number;
+            if let Some(_packet) = self.inbound_acks.remove(&expected_ack_num) {
+                // Nice, remove the next chunk from our queue and go back to step 1
+                self.seq_number = self.seq_number.wrapping_add(1);
+                self.outbound_data.pop_front();
+                continue;
+            }
+
+            // 3. No ACKs yet for the next packet, so poll for a new packet
+            let maybe_next_packet = self
+                .socket
+                .packets(self.connection_id_recv(), self.remote_addr())
+                .try_poll_next_unpin(cx);
+            match maybe_next_packet {
+                Poll::Pending => {
+                    // No packets available yet. Try sending the next packet in the outbound queue
+                    ready!(self.socket.poll_send_to(cx, todo!(), self.remote_addr()))?;
+                }
+                Poll::Ready(Some(result)) => self.handle_packet(result?),
+                Poll::Ready(None) => {
+                    // TODO: Stream has terminated, return an error?
+                    todo!()
+                }
+            }
+
+            // 4. Go back to step 1
+        }
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        ready!(self.poll_flush(cx))?;
         // TODO: We could set a shutdown flag on UtpStream and return Ok(0) for any future calls to
         //       poll_write, effectively preventing any more packets from being sent
         todo!()
