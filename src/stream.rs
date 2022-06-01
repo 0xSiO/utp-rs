@@ -30,7 +30,6 @@ pub(crate) const MAX_DATA_SEGMENT_SIZE: usize =
 //
 // For writing, we will be sending data packets and receiving ACKs.
 //
-// For poll_write, break up data into chunks and add to self.outbound_data, a Vec<Bytes>.
 // For poll_flush, use the following algorithm:
 //   1. Return Poll::Ready if self.outbound_data is empty
 //   2. Check inbound ACK packet buffer to see if there's one w/ ack_number = self.seq_number
@@ -259,11 +258,16 @@ impl AsyncRead for UtpStream {
 
 impl AsyncWrite for UtpStream {
     fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        todo!()
+        // TODO: Don't copy each chunk, use Bytes::split_to to split up the data
+        self.outbound_data.extend(
+            buf.chunks(MAX_DATA_SEGMENT_SIZE)
+                .map(Bytes::copy_from_slice),
+        );
+        Poll::Ready(Ok(buf.len()))
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
