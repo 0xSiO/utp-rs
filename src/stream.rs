@@ -5,7 +5,6 @@ use std::{
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use bytes::{Bytes, BytesMut};
@@ -17,9 +16,11 @@ use tokio::{
 };
 
 use crate::{
+    congestion::CongestionController,
     error::*,
     packet::{Extension, Packet, PacketType},
     socket::UtpSocket,
+    time::current_micros,
 };
 
 pub(crate) const MAX_DATA_SEGMENT_SIZE: usize =
@@ -28,6 +29,7 @@ pub(crate) const MAX_DATA_SEGMENT_SIZE: usize =
 #[allow(dead_code)]
 pub struct UtpStream {
     socket: Arc<UtpSocket>,
+    congestion_controller: CongestionController,
     connection_id_recv: u16,
     connection_id_send: u16,
     remote_addr: SocketAddr,
@@ -55,6 +57,7 @@ impl UtpStream {
     ) -> Self {
         Self {
             socket,
+            congestion_controller: CongestionController::new(),
             connection_id_recv,
             connection_id_send,
             remote_addr,
@@ -146,16 +149,9 @@ impl UtpStream {
         extensions: Vec<Extension>,
         data: Bytes,
     ) -> Poll<io::Result<()>> {
-        let now = SystemTime::now();
-        let total_microseconds = now.duration_since(UNIX_EPOCH).unwrap().as_micros();
-        // We really only need the last 32 bits of the current time. This is meant to measure
-        // delays between sender and receiver, and u32::MAX microseconds is about 72 minutes,
-        // which should be more than enough to measure a one-way transmission delay.
-        let truncated_microseconds = (total_microseconds & u32::MAX as u128) as u32;
-
         // TODO: Fill out the rest of the packet fields
         #[rustfmt::skip]
-        let packet = Packet::new(packet_type, 1, self.connection_id_send(), truncated_microseconds,
+        let packet = Packet::new(packet_type, 1, self.connection_id_send(), current_micros(),
                                  0, 0, seq_number, ack_number, extensions, data);
         let _bytes_sent = ready!(self.socket.poll_send_to(cx, packet, self.remote_addr()))?;
         // TODO: Add bytes sent to current window
