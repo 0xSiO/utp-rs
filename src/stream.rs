@@ -26,6 +26,7 @@ use crate::{
 pub(crate) const MAX_DATA_SEGMENT_SIZE: usize =
     crate::socket::MAX_DATAGRAM_SIZE - crate::packet::PACKET_HEADER_LEN;
 
+// TODO: Track connection state (connected, shutdown, etc.)
 #[allow(dead_code)]
 pub struct UtpStream {
     socket: Arc<UtpSocket>,
@@ -33,12 +34,18 @@ pub struct UtpStream {
     connection_id_recv: u16,
     connection_id_send: u16,
     remote_addr: SocketAddr,
-    // TODO: Track connection state (connected, shutdown, etc.)
+    /// Sequence number of the next packet we will send
     seq_number: u16,
+    /// Sequence number of the next packet we need to ACK
     ack_number: u16,
+    /// Buffer for received but unACKed data
     inbound_data: HashMap<u16, Bytes>,
+    /// Buffer for received and ACKed data
     received_data: BytesMut,
+    /// Buffer for unsent data
     outbound_data: VecDeque<Bytes>,
+    /// Buffer for unprocessed ACKs
+    // TODO: Packets should be processed by congestion controller before ending up here
     inbound_acks: HashMap<u16, Packet>,
 }
 
