@@ -147,6 +147,19 @@ impl UtpStream {
         self.remote_addr
     }
 
+    fn poll_read_packet(&mut self, cx: &mut Context<'_>) -> Poll<Option<io::Result<Packet>>> {
+        let maybe_packet = ready!(self
+            .socket
+            .packets(self.connection_id_recv(), self.remote_addr())
+            .try_poll_next_unpin(cx));
+
+        if let Some(Ok(ref packet)) = maybe_packet {
+            self.congestion_controller.update_state(packet);
+        }
+
+        Poll::Ready(maybe_packet)
+    }
+
     fn poll_send_packet(
         &self,
         cx: &mut Context<'_>,
@@ -225,11 +238,57 @@ impl fmt::Debug for UtpStream {
 
 impl AsyncRead for UtpStream {
     fn poll_read(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-        _buf: &mut ReadBuf<'_>,
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        todo!()
+        // 1. Read as many packets as possible
+        while let Poll::Ready(option) = self.poll_read_packet(cx) {
+            if let Some(result) = option {
+                let packet = result?;
+                // TODO: This updates existing inbound data with this seq_number. Is this ok?
+                // TODO: What if we're inserting data from a resent packet we just ACKed a little
+                // while ago?
+                self.inbound_data.insert(packet.seq_number, packet.data);
+            } else {
+                // Packet stream has terminated, so indicate EOF
+                // Set a flag on self so we always return this from now on?
+                return Poll::Ready(Ok(()));
+            }
+        }
+
+        // 2. Assemble as much data as possible, in order
+        let mut expected_ack_num = self.ack_number.wrapping_add(1);
+        while let Some(data) = self.inbound_data.remove(&expected_ack_num) {
+            // TODO: Decrease local receive window
+            self.received_data.extend_from_slice(&data);
+            // Set ack_number to sequence number of last received packet
+            self.ack_number = expected_ack_num;
+            expected_ack_num = expected_ack_num.wrapping_add(1);
+        }
+
+        // 3. Try sending an ACK for the last packet we got
+        ready!(self.poll_send_ack(cx))?;
+        self.ack_number = self.ack_number.wrapping_add(1);
+
+        // 4. ACK sent, write data to buffer if we have any
+        if self.received_data.is_empty() {
+            // TODO: Schedule wakeup? Go back to beginning?
+            Poll::Pending
+        } else {
+            let chunk = if self.received_data.len() > buf.remaining() {
+                self.received_data.split_to(buf.remaining())
+            } else {
+                self.received_data.split()
+            };
+
+            debug_assert!(chunk.len() <= buf.remaining());
+            buf.put_slice(&chunk);
+
+            // TODO: Increase local receive window
+
+            Poll::Ready(Ok(()))
+        }
     }
 }
 
