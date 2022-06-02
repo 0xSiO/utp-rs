@@ -21,7 +21,9 @@ use crate::{
     packet::{Packet, PacketType},
 };
 
-// Ethernet MTU minus IP/UDP header sizes. TODO: Use path MTU discovery
+// Ethernet MTU minus IP/UDP header sizes.
+// TODO: Lower this limit a bit more, since things like VPNs will increase fragmentation
+// TODO: Use path MTU discovery
 pub(crate) const MAX_DATAGRAM_SIZE: usize = 1472;
 
 #[derive(Debug)]
