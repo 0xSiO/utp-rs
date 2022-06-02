@@ -242,13 +242,28 @@ impl AsyncRead for UtpStream {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        // 1. Read as many packets as possible
+        // 1. Read and save as many packets as possible
         while let Poll::Ready(option) = self.poll_read_packet(cx) {
             if let Some(result) = option {
                 let packet = result?;
-                // TODO: This updates existing inbound data with this seq_number. Is this ok?
-                // TODO: What if we're inserting data from a resent packet we just ACKed a little
-                // while ago?
+                // TODO: What if it's a resent packet we already ACKed a little while ago?
+                // Possible solution: Only save new packets if their seq_number falls within a
+                // certain distance from self.ack_number. This distance can be estimated by
+                // dividing the current local receive window by the bytes per uTP packet.
+                // Then if packet.seq_number - self.ack_number > distance, drop the packet.
+                //
+                // Receive window for all possible packets: ~1400 bytes * u16::MAX, roughly 91 MB.
+                // Keep receive window much smaller than that and the estimated distance for
+                // acceptable seq_numbers shouldn't cause any issues.
+                //
+                // |......................A---------E.........|
+                // 0                      ^---------^      u16::MAX
+                //                         distance
+                // A = self.ack_number
+                // E = end of acceptable seq_numbers
+
+                // TODO: Check packet type, put ACKs in separate buffer
+                // TODO: Should we drop unACKed packets that we've already received?
                 self.inbound_data.insert(packet.seq_number, packet.data);
             } else {
                 // Packet stream has terminated, so indicate EOF
