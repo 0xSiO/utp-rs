@@ -300,24 +300,27 @@ impl AsyncRead for UtpStream {
         }
 
         // 2. Assemble as much data as possible, in order
-        let mut expected_ack_num = self.ack_number.wrapping_add(1);
-        while let Some(data) = self.inbound_data.remove(&expected_ack_num) {
-            // TODO: Decrease local receive window
+        let mut next_seq_num = self.ack_number.wrapping_add(1);
+        while let Some(data) = self.inbound_data.remove(&next_seq_num) {
+            // TODO: Decrease local receive window?
             self.received_data.extend_from_slice(&data);
             // Set ack_number to sequence number of last received packet
-            self.ack_number = expected_ack_num;
-            expected_ack_num = expected_ack_num.wrapping_add(1);
+            self.ack_number = next_seq_num;
+            next_seq_num = next_seq_num.wrapping_add(1);
         }
 
         // 3. Try sending an ACK for the last packet we got
         ready!(self.poll_send_ack(cx))?;
-        self.ack_number = self.ack_number.wrapping_add(1);
 
-        // 4. ACK sent, write data to buffer if we have any
+        // 4. ACK sent!
         if self.received_data.is_empty() {
-            // TODO: Schedule wakeup? Go back to beginning?
+            // We don't have any data, which means we must have sent a duplicate ACK.
+            // Schedule this task again so we can poll the socket some more.
+            // TODO: How many of these duplicates should we tolerate before giving up?
+            cx.waker().wake_by_ref();
             Poll::Pending
         } else {
+            // Write as much data to the buffer as possible
             let chunk = if self.received_data.len() > buf.remaining() {
                 self.received_data.split_to(buf.remaining())
             } else {
@@ -326,9 +329,7 @@ impl AsyncRead for UtpStream {
 
             debug_assert!(chunk.len() <= buf.remaining());
             buf.put_slice(&chunk);
-
-            // TODO: Increase local receive window
-
+            // TODO: Increase local receive window?
             Poll::Ready(Ok(()))
         }
     }
