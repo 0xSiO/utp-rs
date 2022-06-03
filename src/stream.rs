@@ -183,10 +183,13 @@ impl UtpStream {
                 let permitted_distance = 128; // We'll use 128 for now as an arbitrary estimate
                 if packet.seq_number.wrapping_sub(self.ack_number) <= permitted_distance {
                     // TODO: Should we drop unACKed packets that we've already received?
+                    // libutp just discards duplicates
                     self.inbound_data.insert(packet.seq_number, packet.data);
                 }
             }
             PacketType::State => {
+                // TODO: Drop packets outside an acceptable distance from the current seq_number
+
                 // Remove any data that has now been ACKed
                 while let Some((oldest_seq_num, data)) = self.unacked_data.pop_front() {
                     // TODO: Be more precise about this comparison (account for overflow)
