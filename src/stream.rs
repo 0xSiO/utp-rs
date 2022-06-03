@@ -235,6 +235,30 @@ impl fmt::Debug for UtpStream {
 }
 
 // TODO: Do some more research on how packets should actually be sent/received :)
+//
+// Example conversation between two peers, A and B.
+// A -> SYN  (Conn 30873, Wnd  262 KB, Seq 23958, Ack     0,   0 bytes) #93
+//   Ext 2: bitfield 0x0000000000000000
+// B <- ACK  (Conn 30873, Wnd 1048 KB, Seq 21281, Ack 23958,   0 bytes) #108
+// A -> DATA (Conn 30874, Wnd  262 KB, Seq 23959, Ack 21280, 520 bytes) #136
+// B <- ACK  (Conn 30873, Wnd 1048 KB, Seq 21281, Ack 23959,   0 bytes) #149
+// B <- DATA (Conn 30873, Wnd 1048 KB, Seq 21281, Ack 23959, 185 bytes) #151
+// A -> ACK  (Conn 30874, Wnd  262 KB, Seq 23960, Ack 21281,   0 bytes) #165
+// A -> DATA (Conn 30874, Wnd  262 KB, Seq 23960, Ack 21281, 124 bytes) #180
+// B <- ACK  (Conn 30873, Wnd 1048 KB, Seq 21282, Ack 23960,   0 bytes) #205
+//
+// Some time later...
+// B <- DATA (Conn 30873, Wnd 1048 KB, Seq 21287, Ack 23963, 528 bytes) #3953
+// B <- DATA (Conn 30873, Wnd 1048 KB, Seq 21288, Ack 23963, 528 bytes) #3954
+// B <- DATA (Conn 30873, Wnd 1048 KB, Seq 21289, Ack 23963, 528 bytes) #3955
+// B <- DATA (Conn 30873, Wnd 1048 KB, Seq 21290, Ack 23963, 528 bytes) #3956
+// A -> ACK  (Conn 30874, Wnd  262 KB, Seq 23964, Ack 21290,   0 bytes) #4004
+// (B sends 10 more DATA packets with 528 bytes each. Last Seq 21300, Ack 23963)
+// A -> ACK  (Conn 30874, Wnd  262 KB, Seq 23964, Ack 21295,   0 bytes) #4042
+// A -> ACK  (Conn 30874, Wnd  262 KB, Seq 23964, Ack 21300,   0 bytes) #4043
+// (B sends 5 more DATA packets just like above, Last Seq 21305, Ack 23963)
+// A -> ACK  (Conn 30874, Wnd  262 KB, Seq 23964, Ack 21305,   0 bytes) #4070
+// ...
 
 impl AsyncRead for UtpStream {
     fn poll_read(
@@ -263,8 +287,11 @@ impl AsyncRead for UtpStream {
                 // E = end of acceptable seq_numbers
 
                 // TODO: Check packet type, put ACKs in separate buffer
-                // TODO: Should we drop unACKed packets that we've already received?
-                self.inbound_data.insert(packet.seq_number, packet.data);
+                let permitted_distance = 128; // We'll use 128 for now as an arbitrary estimate
+                if packet.seq_number.wrapping_sub(self.ack_number) <= permitted_distance {
+                    // TODO: Should we drop unACKed packets that we've already received?
+                    self.inbound_data.insert(packet.seq_number, packet.data);
+                }
             } else {
                 // Packet stream has terminated, so indicate EOF
                 // Set a flag on self so we always return this from now on?
