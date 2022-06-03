@@ -347,11 +347,24 @@ impl AsyncWrite for UtpStream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
+        let mut bytes_written = 0;
+
         // TODO: Don't copy each chunk, use Bytes::split_to to split up the data
         for chunk in buf.chunks(MAX_DATA_SEGMENT_SIZE) {
-            ready!(self.poll_send_data(cx, Bytes::copy_from_slice(chunk)))?;
+            match self.poll_send_data(cx, Bytes::copy_from_slice(chunk)) {
+                Poll::Ready(Ok(_)) => bytes_written += chunk.len(),
+                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                Poll::Pending => {
+                    if bytes_written == 0 {
+                        // Don't return Poll::Ready(Ok(0)) yet, we may be writable in the future
+                        return Poll::Pending;
+                    }
+                    break;
+                }
+            }
         }
-        Poll::Ready(Ok(buf.len()))
+
+        Poll::Ready(Ok(bytes_written))
     }
 
     // TODO: Any extra required logic to deal with duplicate ACKs and lost packets
