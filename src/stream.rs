@@ -38,12 +38,12 @@ pub struct UtpStream {
     seq_number: u16,
     /// Sequence number of the next packet we need to ACK
     ack_number: u16,
-    /// Buffer for received but unACKed data
+    /// Buffer for received but unACKed data. Entries are (seq_number, data)
     inbound_data: HashMap<u16, Bytes>,
     /// Buffer for received and ACKed data
     received_data: BytesMut,
-    /// Buffer for unsent data
-    outbound_data: VecDeque<Bytes>,
+    /// Queue for in-flight data (sent but unACKed). Elements are (seq_number, data)
+    unacked_data: VecDeque<(u16, Bytes)>,
     /// Buffer for unprocessed ACKs
     // TODO: Packets should be processed by congestion controller before ending up here
     inbound_acks: HashMap<u16, Packet>,
@@ -59,7 +59,7 @@ impl UtpStream {
         ack_number: u16,
         inbound_data: HashMap<u16, Bytes>,
         received_data: BytesMut,
-        outbound_data: VecDeque<Bytes>,
+        unacked_data: VecDeque<(u16, Bytes)>,
         inbound_acks: HashMap<u16, Packet>,
     ) -> Self {
         Self {
@@ -72,7 +72,7 @@ impl UtpStream {
             ack_number,
             inbound_data,
             received_data,
-            outbound_data,
+            unacked_data,
             inbound_acks,
         }
     }
@@ -160,24 +160,6 @@ impl UtpStream {
         Poll::Ready(maybe_packet)
     }
 
-    fn poll_send_packet(
-        &self,
-        cx: &mut Context<'_>,
-        packet_type: PacketType,
-        seq_number: u16,
-        ack_number: u16,
-        extensions: Vec<Extension>,
-        data: Bytes,
-    ) -> Poll<io::Result<()>> {
-        // TODO: Fill out the rest of the packet fields
-        #[rustfmt::skip]
-        let packet = Packet::new(packet_type, 1, self.connection_id_send(), current_micros(),
-                                 0, 0, seq_number, ack_number, extensions, data);
-        let _bytes_sent = ready!(self.socket.poll_send_to(cx, packet, self.remote_addr()))?;
-        // TODO: Add bytes sent to current window
-        Poll::Ready(Ok(()))
-    }
-
     fn handle_packet(&mut self, packet: Packet) {
         debug!("Handling inbound packet: {:?}", packet);
         match packet.packet_type {
@@ -205,16 +187,40 @@ impl UtpStream {
                 }
             }
             PacketType::State => {
-                // Queue up the ACK to be processed during poll_flush
-
-                // TODO: What if we already have this packet?
-                self.inbound_acks.insert(packet.ack_number, packet);
+                // Remove any data that has now been ACKed
+                while let Some((oldest_seq_num, data)) = self.unacked_data.pop_front() {
+                    // TODO: Be more precise about this comparison (account for overflow)
+                    if oldest_seq_num <= packet.ack_number {
+                        drop((oldest_seq_num, data));
+                    } else {
+                        // Oops, put it back - we haven't gotten an ACK for this one yet
+                        self.unacked_data.push_front((oldest_seq_num, data));
+                        break;
+                    }
+                }
             }
             _ => {
                 // TODO: Respond to other packet types
                 todo!()
             }
         }
+    }
+
+    fn poll_send_packet(
+        &self,
+        cx: &mut Context<'_>,
+        packet_type: PacketType,
+        seq_number: u16,
+        ack_number: u16,
+        extensions: Vec<Extension>,
+        data: Bytes,
+    ) -> Poll<io::Result<()>> {
+        // TODO: Fill out the rest of the packet fields
+        #[rustfmt::skip]
+        let packet = Packet::new(packet_type, 1, self.connection_id_send(), current_micros(),
+                                 0, 0, seq_number, ack_number, extensions, data);
+        let _bytes_sent = ready!(self.socket.poll_send_to(cx, packet, self.remote_addr()))?;
+        Poll::Ready(Ok(()))
     }
 
     fn poll_send_ack(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -228,15 +234,20 @@ impl UtpStream {
         )
     }
 
-    fn poll_send_data(&self, cx: &mut Context<'_>, data: Bytes) -> Poll<io::Result<()>> {
-        self.poll_send_packet(
+    fn poll_send_data(&mut self, cx: &mut Context<'_>, data: Bytes) -> Poll<io::Result<()>> {
+        ready!(self.poll_send_packet(
             cx,
             PacketType::Data,
             self.seq_number,
             self.ack_number,
             vec![],
-            data,
-        )
+            data.clone(),
+        ))?;
+
+        self.unacked_data.push_back((self.seq_number, data));
+        self.seq_number = self.seq_number.wrapping_add(1);
+        // TODO: Update current window here?
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -333,14 +344,13 @@ impl AsyncRead for UtpStream {
 impl AsyncWrite for UtpStream {
     fn poll_write(
         mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         // TODO: Don't copy each chunk, use Bytes::split_to to split up the data
-        self.outbound_data.extend(
-            buf.chunks(MAX_DATA_SEGMENT_SIZE)
-                .map(Bytes::copy_from_slice),
-        );
+        for chunk in buf.chunks(MAX_DATA_SEGMENT_SIZE) {
+            ready!(self.poll_send_data(cx, Bytes::copy_from_slice(chunk)))?;
+        }
         Poll::Ready(Ok(buf.len()))
     }
 
