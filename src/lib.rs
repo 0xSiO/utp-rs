@@ -161,9 +161,11 @@ mod tests {
 
         // Send/receive multiple packets of data
         const NUM_PACKETS: usize = 25;
-        let large_message = [1_u8; MAX_DATA_SEGMENT_SIZE * NUM_PACKETS];
+        // Extra amount of bytes to force a smaller packet to be sent
+        const LEFTOVER: usize = 512;
+        let large_message = [1_u8; MAX_DATA_SEGMENT_SIZE * NUM_PACKETS + LEFTOVER];
         stream_1.write_all(&large_message).await.unwrap();
-        let mut large_buf = [0; MAX_DATA_SEGMENT_SIZE * NUM_PACKETS];
+        let mut large_buf = [0; MAX_DATA_SEGMENT_SIZE * NUM_PACKETS + LEFTOVER];
         let ((), bytes_read) =
             tokio::try_join!(stream_1.flush(), stream_2.read_exact(&mut large_buf)).unwrap();
         assert_eq!(bytes_read, large_message.len());
