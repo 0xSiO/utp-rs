@@ -182,10 +182,27 @@ impl UtpStream {
         debug!("Handling inbound packet: {:?}", packet);
         match packet.packet_type {
             PacketType::Data => {
-                // Queue up the data packet to be processed during poll_read
+                // TODO: What if it's a resent packet we already ACKed a little while ago?
+                // Possible solution: Only save new packets if their seq_number falls within a
+                // certain distance from self.ack_number. This distance can be estimated by
+                // dividing the current local receive window by the bytes per uTP packet.
+                // Then if packet.seq_number - self.ack_number > distance, drop the packet.
+                //
+                // Receive window for all possible packets: ~1400 bytes * u16::MAX, roughly 91 MB.
+                // Keep receive window much smaller than that and the estimated distance for
+                // acceptable seq_numbers shouldn't cause any issues.
+                //
+                // |......................A---------E.........|
+                // 0                      ^---------^      u16::MAX
+                //                         distance
+                // A = self.ack_number
+                // E = end of acceptable seq_numbers
 
-                // TODO: What if we already have this packet?
-                self.inbound_data.insert(packet.seq_number, packet.data);
+                let permitted_distance = 128; // We'll use 128 for now as an arbitrary estimate
+                if packet.seq_number.wrapping_sub(self.ack_number) <= permitted_distance {
+                    // TODO: Should we drop unACKed packets that we've already received?
+                    self.inbound_data.insert(packet.seq_number, packet.data);
+                }
             }
             PacketType::State => {
                 // Queue up the ACK to be processed during poll_flush
@@ -268,34 +285,12 @@ impl AsyncRead for UtpStream {
     ) -> Poll<io::Result<()>> {
         // 1. Read and save as many packets as possible
         while let Poll::Ready(option) = self.poll_read_packet(cx) {
-            if let Some(result) = option {
-                let packet = result?;
-                // TODO: What if it's a resent packet we already ACKed a little while ago?
-                // Possible solution: Only save new packets if their seq_number falls within a
-                // certain distance from self.ack_number. This distance can be estimated by
-                // dividing the current local receive window by the bytes per uTP packet.
-                // Then if packet.seq_number - self.ack_number > distance, drop the packet.
-                //
-                // Receive window for all possible packets: ~1400 bytes * u16::MAX, roughly 91 MB.
-                // Keep receive window much smaller than that and the estimated distance for
-                // acceptable seq_numbers shouldn't cause any issues.
-                //
-                // |......................A---------E.........|
-                // 0                      ^---------^      u16::MAX
-                //                         distance
-                // A = self.ack_number
-                // E = end of acceptable seq_numbers
-
-                // TODO: Check packet type, put ACKs in separate buffer
-                let permitted_distance = 128; // We'll use 128 for now as an arbitrary estimate
-                if packet.seq_number.wrapping_sub(self.ack_number) <= permitted_distance {
-                    // TODO: Should we drop unACKed packets that we've already received?
-                    self.inbound_data.insert(packet.seq_number, packet.data);
-                }
-            } else {
+            match option {
+                Some(Ok(packet)) => self.handle_packet(packet),
+                Some(Err(err)) => return Poll::Ready(Err(err)),
                 // Packet stream has terminated, so indicate EOF
-                // Set a flag on self so we always return this from now on?
-                return Poll::Ready(Ok(()));
+                // TODO: Set a flag on self so we always return this from now on?
+                None => return Poll::Ready(Ok(())),
             }
         }
 
@@ -312,7 +307,7 @@ impl AsyncRead for UtpStream {
         // 3. Try sending an ACK for the last packet we got
         ready!(self.poll_send_ack(cx))?;
 
-        // 4. ACK sent!
+        // 4. ACK sent, write data to buffer, if any
         if self.received_data.is_empty() {
             // We don't have any data, which means we must have sent a duplicate ACK.
             // Schedule this task again so we can poll the socket some more.
