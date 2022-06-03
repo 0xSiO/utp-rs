@@ -294,7 +294,7 @@ impl AsyncRead for UtpStream {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        // 1. Read and save as many packets as possible
+        // 1. Process as many packets as possible
         while let Poll::Ready(option) = self.poll_read_packet(cx) {
             match option {
                 Some(Ok(packet)) => self.handle_packet(packet),
@@ -321,8 +321,9 @@ impl AsyncRead for UtpStream {
         // 4. ACK sent, write data to buffer, if any
         if self.received_data.is_empty() {
             // We don't have any data, which means we must have sent a duplicate ACK.
-            // Schedule this task again so we can poll the socket some more.
             // TODO: How many of these duplicates should we tolerate before giving up?
+            // TODO: Do we need to schedule this immediately? Note that polling the socket only
+            // schedules the most recent caller for a wakeup.
             cx.waker().wake_by_ref();
             Poll::Pending
         } else {
@@ -368,8 +369,27 @@ impl AsyncWrite for UtpStream {
     }
 
     // TODO: Any extra required logic to deal with duplicate ACKs and lost packets
-    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        todo!()
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        // 1. Process as many packets as possible
+        while let Poll::Ready(option) = self.poll_read_packet(cx) {
+            match option {
+                Some(Ok(packet)) => self.handle_packet(packet),
+                Some(Err(err)) => return Poll::Ready(Err(err)),
+                // Packet stream has terminated, so indicate EOF
+                // TODO: Set a flag on self so we always return this from now on?
+                None => return Poll::Ready(Ok(())),
+            }
+        }
+
+        // 2. Return if there's no more unACKed data
+        if self.unacked_data.is_empty() {
+            Poll::Ready(Ok(()))
+        } else {
+            // TODO: Do we need to schedule this immediately? Note that polling the socket only
+            // schedules the most recent caller for a wakeup.
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
     }
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
