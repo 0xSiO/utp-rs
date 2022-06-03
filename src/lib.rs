@@ -33,9 +33,13 @@ mod tests {
     use bytes::Bytes;
     use futures_util::{stream::FuturesUnordered, StreamExt, TryStreamExt};
     use log::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
-    use packet::{Packet, PacketType};
+    use crate::{
+        packet::{Packet, PacketType},
+        stream::MAX_DATA_SEGMENT_SIZE,
+    };
 
     fn init_logger() {
         let _ = pretty_env_logger::try_init();
@@ -134,5 +138,35 @@ mod tests {
         let send_handle = tokio::spawn(send_tasks.collect::<Vec<_>>());
         let recv_handle = tokio::spawn(recv_tasks.collect::<Vec<_>>());
         let _ = tokio::join!(send_handle, recv_handle);
+    }
+
+    #[tokio::test]
+    async fn async_read_and_write_test() {
+        init_logger();
+
+        let local_socket = get_socket().await;
+        let remote_socket = get_socket().await;
+
+        let (mut stream_1, mut stream_2) =
+            get_connection_pair(Arc::clone(&local_socket), Arc::clone(&remote_socket)).await;
+
+        // Send/receive 1 packet of data
+        let message = [1_u8; MAX_DATA_SEGMENT_SIZE];
+        stream_1.write_all(&message).await.unwrap();
+        let mut buf = [0; MAX_DATA_SEGMENT_SIZE];
+        let ((), bytes_read) =
+            tokio::try_join!(stream_1.flush(), stream_2.read_exact(&mut buf)).unwrap();
+        assert_eq!(bytes_read, message.len());
+        assert_eq!(buf, message);
+
+        // Send/receive multiple packets of data
+        const NUM_PACKETS: usize = 25;
+        let large_message = [1_u8; MAX_DATA_SEGMENT_SIZE * NUM_PACKETS];
+        stream_1.write_all(&large_message).await.unwrap();
+        let mut large_buf = [0; MAX_DATA_SEGMENT_SIZE * NUM_PACKETS];
+        let ((), bytes_read) =
+            tokio::try_join!(stream_1.flush(), stream_2.read_exact(&mut large_buf)).unwrap();
+        assert_eq!(bytes_read, large_message.len());
+        assert_eq!(large_buf, large_message);
     }
 }

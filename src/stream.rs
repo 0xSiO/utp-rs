@@ -322,9 +322,6 @@ impl AsyncRead for UtpStream {
         if self.received_data.is_empty() {
             // We don't have any data, which means we must have sent a duplicate ACK.
             // TODO: How many of these duplicates should we tolerate before giving up?
-            // TODO: Do we need to schedule this immediately? Note that polling the socket only
-            // schedules the most recent caller for a wakeup.
-            cx.waker().wake_by_ref();
             Poll::Pending
         } else {
             // Write as much data to the buffer as possible
@@ -385,9 +382,6 @@ impl AsyncWrite for UtpStream {
         if self.unacked_data.is_empty() {
             Poll::Ready(Ok(()))
         } else {
-            // TODO: Do we need to schedule this immediately? Note that polling the socket only
-            // schedules the most recent caller for a wakeup.
-            cx.waker().wake_by_ref();
             Poll::Pending
         }
     }
