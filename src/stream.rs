@@ -44,9 +44,6 @@ pub struct UtpStream {
     received_data: BytesMut,
     /// Queue for in-flight data (sent but unACKed). Elements are (seq_number, data)
     unacked_data: VecDeque<(u16, Bytes)>,
-    /// Buffer for unprocessed ACKs
-    // TODO: Packets should be processed by congestion controller before ending up here
-    inbound_acks: HashMap<u16, Packet>,
 }
 
 impl UtpStream {
@@ -60,7 +57,6 @@ impl UtpStream {
         inbound_data: HashMap<u16, Bytes>,
         received_data: BytesMut,
         unacked_data: VecDeque<(u16, Bytes)>,
-        inbound_acks: HashMap<u16, Packet>,
     ) -> Self {
         Self {
             socket,
@@ -73,7 +69,6 @@ impl UtpStream {
             inbound_data,
             received_data,
             unacked_data,
-            inbound_acks,
         }
     }
 
@@ -115,7 +110,6 @@ impl UtpStream {
                     remote_addr,
                     seq_number,
                     response_packet.seq_number,
-                    Default::default(),
                     Default::default(),
                     Default::default(),
                     Default::default(),

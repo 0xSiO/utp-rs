@@ -48,6 +48,7 @@ impl UtpListener {
             .init_connection(connection_id_recv, remote_addr)
             .is_ok()
         {
+            // TODO: Move this into UtpStream functionality
             #[rustfmt::skip]
             let syn_ack = Packet::new(
                 PacketType::State, 1, connection_id_send, 0, 0, 0, seq_number, ack_number,
@@ -65,7 +66,6 @@ impl UtpListener {
                 remote_addr,
                 seq_number,
                 ack_number,
-                Default::default(),
                 Default::default(),
                 Default::default(),
                 Default::default(),
