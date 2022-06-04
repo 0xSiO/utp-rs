@@ -1,4 +1,4 @@
-use crate::{packet::Packet, time::current_micros};
+use crate::packet::Packet;
 
 /// This is the initial receive buffer capacity used by libtorrent
 const LOCAL_RECEIVE_WINDOW_SIZE: u32 = 1024 * 1024;
@@ -40,8 +40,8 @@ impl CongestionController {
         }
     }
 
-    pub fn update_state(&mut self, received_packet: &Packet) {
-        let local_delay = current_micros().wrapping_sub(received_packet.timestamp_micros);
+    pub fn update_state(&mut self, received_at: u32, received_packet: &Packet) {
+        let local_delay = received_at.wrapping_sub(received_packet.timestamp_micros);
         let remote_delay = received_packet.timestamp_delta_micros;
 
         // Update base delays if these are the lowest seen

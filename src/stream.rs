@@ -148,10 +148,57 @@ impl UtpStream {
             .try_poll_next_unpin(cx));
 
         if let Some(Ok(ref packet)) = maybe_packet {
-            self.congestion_controller.update_state(packet);
+            // We want to create this timestamp as close to receipt time as possible
+            let received_at = current_micros();
+            if !self.is_suspicious(packet) {
+                self.congestion_controller.update_state(received_at, packet);
+            }
         }
 
         Poll::Ready(maybe_packet)
+    }
+
+    fn is_suspicious(&self, packet: &Packet) -> bool {
+        match packet.packet_type {
+            // For data packets, we will consider sequence numbers outside a certain distance
+            // from our current ack_number to be suspicious.
+            //
+            //  0             A = self.ack_number      65535
+            //  |---------------><----A----><------------|
+            //         sus           ok          sus
+            PacketType::Data => {
+                // TODO: We'll use 128 for now as an arbitrary estimate, but perhaps this should
+                // depend somewhat on the local receive window
+                let acceptable_distance = 128;
+                let left_distance = self.ack_number.wrapping_sub(packet.seq_number);
+                let right_distance = packet.seq_number.wrapping_sub(self.ack_number);
+                if left_distance > acceptable_distance && right_distance > acceptable_distance {
+                    return true; // kinda sus
+                }
+                // TODO: Other heuristics?
+            }
+            // For ACKs, we use a similar heuristic to the one for data packets. If the packet
+            // ack_number is greater than or equal to our current seq_number, or is further back
+            // than the current send window, we'll consider it suspicious.
+            //
+            //  0             S = self.seq_number      65535
+            //  |--------------><---->S<-----------------|
+            //         sus        ok          sus
+            PacketType::State => {
+                // We'll give some leeway of a few packets too, just in case.
+                // TODO: Is 3 a good estimate for now?
+                let acceptable_distance = self.unacked_data.len() + 3;
+                let left_distance = self.seq_number.wrapping_sub(packet.ack_number) as usize;
+                if left_distance == 0 || left_distance > acceptable_distance {
+                    return true; // kinda sus
+                }
+                // TODO: Other heuristics?
+            }
+            // TODO: Other packet types
+            _ => todo!(),
+        }
+
+        false
     }
 
     fn handle_packet(&mut self, packet: Packet) {
