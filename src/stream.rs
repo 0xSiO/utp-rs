@@ -142,20 +142,27 @@ impl UtpStream {
     }
 
     fn poll_read_packet(&mut self, cx: &mut Context<'_>) -> Poll<Option<io::Result<Packet>>> {
-        let maybe_packet = ready!(self
-            .socket
-            .packets(self.connection_id_recv(), self.remote_addr())
-            .try_poll_next_unpin(cx));
+        loop {
+            let maybe_packet = ready!(self
+                .socket
+                .packets(self.connection_id_recv(), self.remote_addr())
+                .try_poll_next_unpin(cx));
 
-        if let Some(Ok(ref packet)) = maybe_packet {
-            // We want to create this timestamp as close to receipt time as possible
-            let received_at = current_micros();
-            if !self.is_suspicious(packet) {
+            if let Some(Ok(ref packet)) = maybe_packet {
+                // We want to create this timestamp as close to receipt time as possible
+                let received_at = current_micros();
+
+                // Just ignore the packet if it's suspicious
+                // TODO: Maybe close the connection after a certain number of suspicious packets
+                if self.is_suspicious(packet) {
+                    continue;
+                }
+
                 self.congestion_controller.update_state(received_at, packet);
             }
-        }
 
-        Poll::Ready(maybe_packet)
+            return Poll::Ready(maybe_packet);
+        }
     }
 
     fn is_suspicious(&self, packet: &Packet) -> bool {
@@ -205,35 +212,14 @@ impl UtpStream {
         debug!("Handling inbound packet: {:?}", packet);
         match packet.packet_type {
             PacketType::Data => {
-                // TODO: What if it's a resent packet we already ACKed a little while ago?
-                // Possible solution: Only save new packets if their seq_number falls within a
-                // certain distance from self.ack_number. This distance can be estimated by
-                // dividing the current local receive window by the bytes per uTP packet.
-                // Then if packet.seq_number - self.ack_number > distance, drop the packet.
-                //
-                // Receive window for all possible packets: ~1400 bytes * u16::MAX, roughly 91 MB.
-                // Keep receive window much smaller than that and the estimated distance for
-                // acceptable seq_numbers shouldn't cause any issues.
-                //
-                // |......................A---------E.........|
-                // 0                      ^---------^      u16::MAX
-                //                         distance
-                // A = self.ack_number
-                // E = end of acceptable seq_numbers
-
-                let permitted_distance = 128; // We'll use 128 for now as an arbitrary estimate
-                if packet.seq_number.wrapping_sub(self.ack_number) <= permitted_distance {
-                    // TODO: Should we drop unACKed packets that we've already received?
-                    // libutp just discards duplicates
-                    self.inbound_data.insert(packet.seq_number, packet.data);
-                }
+                // TODO: Should we drop unACKed packets that we've already received?
+                // libutp just discards duplicates
+                self.inbound_data.insert(packet.seq_number, packet.data);
             }
             PacketType::State => {
-                // TODO: Drop packets outside an acceptable distance from the current seq_number
-
                 // Remove any data that has now been ACKed
                 while let Some((oldest_seq_num, data)) = self.unacked_data.pop_front() {
-                    // TODO: Be more precise about this comparison (account for overflow)
+                    // TODO: Be more precise about this comparison (account for overflow?)
                     if oldest_seq_num <= packet.ack_number {
                         drop((oldest_seq_num, data));
                     } else {
@@ -243,10 +229,8 @@ impl UtpStream {
                     }
                 }
             }
-            _ => {
-                // TODO: Respond to other packet types
-                todo!()
-            }
+            // TODO: Respond to other packet types
+            _ => todo!(),
         }
     }
 
