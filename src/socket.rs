@@ -24,13 +24,18 @@ pub(crate) const MAX_DATAGRAM_SIZE: usize = 1472;
 // TODO: Maybe consider some good bounds for all the unbounded channels
 
 pub struct UtpSocket {
+    /// Underlying UDP socket.
     socket: Arc<UdpSocket>,
+    /// Local address for underlying UDP socket.
     local_addr: SocketAddr,
+    /// Internal routing table for connections listening on this socket. For each value in this
+    /// map, a UtpStream will hold the corresponding receive half of the channel.
     routing_table: Arc<DashMap<(u16, SocketAddr), UnboundedSender<Packet>>>,
-    // A UtpListener will use this to receive SYN packets
-    // TODO: Wrap in an Arc<Mutex<>> so multiple listeners can use it?
+    // Receiver to allow UtpListeners to receive SYN packets
     syn_rx: Arc<Mutex<UnboundedReceiver<(Packet, SocketAddr)>>>,
-    // A UtpStream will clone this and use it to send outgoing packets
+    /// Sender for outgoing packets. UtpStreams can send packets through this sender by calling
+    /// UtpSocket::send_to. Technically we could clone this and provide a sender to each UtpStream
+    /// instead, but it's a bit more complex. TODO: Consider the cloning approach
     outgoing_tx: UnboundedSender<(Packet, SocketAddr)>,
 }
 
@@ -39,58 +44,79 @@ impl UtpSocket {
     pub async fn bind(local_addr: impl ToSocketAddrs) -> io::Result<Self> {
         let udp_socket = UdpSocket::bind(local_addr).await?;
         trace!("binding to {}", udp_socket.local_addr()?);
+        // This will spawn two IO tasks: one for reading incoming packets into the routing table, and
+        // one for sending outgoing packets.
         Self::try_from(udp_socket)
     }
 
-    fn spawn_sender(&self, mut packet_rx: UnboundedReceiver<(Packet, SocketAddr)>) {
-        // TODO: Maybe use a weak reference here
-        let socket = Arc::clone(&self.socket);
+    fn spawn_sender(&self, mut outgoing_rx: UnboundedReceiver<(Packet, SocketAddr)>) {
+        let socket = Arc::downgrade(&self.socket);
         let local_addr = self.local_addr;
         tokio::spawn(async move {
-            while let Some((packet, remote_addr)) = packet_rx.recv().await {
+            while let Some((packet, remote_addr)) = outgoing_rx.recv().await {
+                let socket = match socket.upgrade() {
+                    Some(socket) => socket,
+                    // Socket has been dropped, so shut down
+                    None => break,
+                };
+
                 debug!(
                     "Conn #{}: {} -> {} {:?}",
                     packet.connection_id, local_addr, remote_addr, packet.packet_type
                 );
+
                 // TODO: What happens if there's an error? Ignore it?
                 let _ = socket.send_to(&Bytes::from(packet), remote_addr).await;
             }
         });
     }
 
+    // TODO: What if all strong references to the socket are dropped right before we attempt to
+    //       call recv_from? Will it make this task sleep forever?
     fn spawn_receiver(&self, syn_tx: UnboundedSender<(Packet, SocketAddr)>) {
-        // TODO: Maybe use a weak reference here
-        let socket = Arc::clone(&self.socket);
+        let socket = Arc::downgrade(&self.socket);
         let local_addr = self.local_addr;
-        let routing_table = Arc::clone(&self.routing_table);
+        let routing_table = Arc::downgrade(&self.routing_table);
         tokio::spawn(async move {
-            // TODO: Handle other errors in this task. Ignore? Break?
-            while socket.readable().await.is_ok() {
-                let mut buf = BytesMut::with_capacity(MAX_DATAGRAM_SIZE);
-                buf.resize(MAX_DATAGRAM_SIZE, 0);
-                let (bytes_read, remote_addr) = socket.recv_from(&mut buf).await.unwrap();
-                buf.truncate(bytes_read);
-                let packet = Packet::try_from(buf.freeze())
-                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
-                    .unwrap();
+            while let Some(socket) = socket.upgrade() {
+                // TODO: Handle other errors in this task. Ignore? Break?
+                while socket.readable().await.is_ok() {
+                    let mut buf = BytesMut::with_capacity(MAX_DATAGRAM_SIZE);
+                    buf.resize(MAX_DATAGRAM_SIZE, 0);
+                    let (bytes_read, remote_addr) = socket.recv_from(&mut buf).await.unwrap();
+                    buf.truncate(bytes_read);
+                    let packet = Packet::try_from(buf.freeze())
+                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+                        .unwrap();
 
-                debug!(
-                    "Conn #{}: {} <- {} {:?} ({} bytes)",
-                    packet.connection_id, local_addr, remote_addr, packet.packet_type, bytes_read
-                );
+                    debug!(
+                        "Conn #{}: {} <- {} {:?} ({} bytes)",
+                        packet.connection_id,
+                        local_addr,
+                        remote_addr,
+                        packet.packet_type,
+                        bytes_read
+                    );
 
-                // Route the packet
-                if let PacketType::Syn = packet.packet_type {
-                    // TODO: Error means the receiver (and the UtpSocket) has been dropped
-                    syn_tx.send((packet, remote_addr)).unwrap();
-                } else {
-                    match routing_table.get(&(packet.connection_id, remote_addr)) {
-                        // TODO: Error means the receiver (and the UtpStream) has been dropped
-                        Some(sender) => sender.send(packet).unwrap(),
-                        None => debug!(
-                            "no connections found for packet from {}: {:?}",
-                            remote_addr, packet
-                        ),
+                    // Route the packet
+                    if let PacketType::Syn = packet.packet_type {
+                        // TODO: Error means the receiver (and the UtpSocket) has been dropped
+                        syn_tx.send((packet, remote_addr)).unwrap();
+                    } else {
+                        let routing_table = match routing_table.upgrade() {
+                            Some(routing_table) => routing_table,
+                            // Routing table (and thus the socket) has dropped, so shut down
+                            None => break,
+                        };
+
+                        match routing_table.get(&(packet.connection_id, remote_addr)) {
+                            // TODO: Error means the receiver (and the UtpStream) has been dropped
+                            Some(sender) => sender.send(packet).unwrap(),
+                            None => debug!(
+                                "no connections found for packet from {}: {:?}",
+                                remote_addr, packet
+                            ),
+                        };
                     }
                 }
             }
