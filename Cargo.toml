@@ -7,15 +7,15 @@ publish = false
 [dependencies]
 bytes = "1.1.0"
 crossbeam-queue = "0.3.0"
-dashmap = "5.0.0"
+dashmap = "5.3.0"
 flume = "0.10.0"
 futures-util = "0.3.0"
 log = "0.4.0"
 thiserror = "1.0.0"
-tokio = { version = "1.13.0", features = ["net", "rt", "sync"] }
+tokio = { version = "1.19.0", features = ["net", "rt", "sync"] }
 rand = "0.8.0"
 
 [dev-dependencies]
 futures-util = { version = "0.3.0" }
 pretty_env_logger = "0.4.0"
-tokio = { version = "1.13.0", features = ["io-util", "macros", "rt-multi-thread"] }
+tokio = { version = "1.19.0", features = ["io-util", "macros", "rt-multi-thread"] }
