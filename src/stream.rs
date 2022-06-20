@@ -8,11 +8,12 @@ use std::{
 };
 
 use bytes::{Bytes, BytesMut};
-use futures_util::{ready, stream::TryStreamExt};
+use futures_util::ready;
 use log::debug;
 use tokio::{
     io::{AsyncRead, AsyncWrite, ReadBuf},
     net::{lookup_host, ToSocketAddrs},
+    sync::mpsc::UnboundedReceiver,
 };
 
 use crate::{
@@ -34,6 +35,7 @@ pub struct UtpStream {
     connection_id_recv: u16,
     connection_id_send: u16,
     remote_addr: SocketAddr,
+    inbound_packets: UnboundedReceiver<Packet>,
     /// Sequence number of the next packet we will send
     seq_number: u16,
     /// Sequence number of the next packet we need to ACK
@@ -47,11 +49,13 @@ pub struct UtpStream {
 }
 
 impl UtpStream {
+    // TODO: Remove this?
     pub(crate) fn new(
         socket: Arc<UtpSocket>,
         connection_id_recv: u16,
         connection_id_send: u16,
         remote_addr: SocketAddr,
+        inbound_packets: UnboundedReceiver<Packet>,
         seq_number: u16,
         ack_number: u16,
         inbound_data: HashMap<u16, Bytes>,
@@ -64,6 +68,7 @@ impl UtpStream {
             connection_id_recv,
             connection_id_send,
             remote_addr,
+            inbound_packets,
             seq_number,
             ack_number,
             inbound_data,
@@ -80,25 +85,22 @@ impl UtpStream {
             .next()
             .ok_or(Error::MissingAddress)?;
 
-        let connection_id_recv = socket.register_connection(remote_addr);
+        let (connection_id_recv, mut receiver) = socket.register_connection(remote_addr);
         let connection_id_send = connection_id_recv.wrapping_add(1);
         let seq_number = 1;
         // Just set ack_number to 0, this shouldn't be read by the remote socket anyway
         let ack_number = 0;
+        // TODO: Set other packet fields
         #[rustfmt::skip]
         let syn = Packet::new(PacketType::Syn, 1, connection_id_recv, 0, 0, 0, seq_number,
                               ack_number, vec![], Bytes::new());
         let seq_number = seq_number.wrapping_add(1);
-        socket.send_to(syn, remote_addr).await?;
+        socket.send_to(syn, remote_addr)?;
 
         // state: SYN sent
 
         // TODO: Handle this more gracefully
-        let response_packet = socket
-            .packets(connection_id_recv, remote_addr)
-            .try_next()
-            .await?
-            .unwrap();
+        let response_packet = receiver.recv().await.unwrap();
 
         match response_packet.packet_type {
             PacketType::State => {
@@ -108,6 +110,7 @@ impl UtpStream {
                     connection_id_recv,
                     connection_id_send,
                     remote_addr,
+                    receiver,
                     seq_number,
                     response_packet.seq_number,
                     Default::default(),
@@ -141,14 +144,17 @@ impl UtpStream {
         self.remote_addr
     }
 
-    fn poll_read_packet(&mut self, cx: &mut Context<'_>) -> Poll<Option<io::Result<Packet>>> {
-        loop {
-            let maybe_packet = ready!(self
-                .socket
-                .packets(self.connection_id_recv(), self.remote_addr())
-                .try_poll_next_unpin(cx));
+    pub(crate) fn inbound_packets(&mut self) -> &mut UnboundedReceiver<Packet> {
+        &mut self.inbound_packets
+    }
 
-            if let Some(Ok(ref packet)) = maybe_packet {
+    fn poll_read_packet(&mut self, cx: &mut Context<'_>) -> Poll<Option<Packet>> {
+        loop {
+            // If this is None, the sender half has been dropped, i.e. the connection has been
+            // removed from the socket routing table. TODO: What do?
+            let maybe_packet = ready!(self.inbound_packets.poll_recv(cx));
+
+            if let Some(ref packet) = maybe_packet {
                 // We want to create this timestamp as close to receipt time as possible
                 let received_at = current_micros();
 
@@ -234,9 +240,10 @@ impl UtpStream {
         }
     }
 
+    // TODO: Convert these to non-poll methods
     fn poll_send_packet(
         &self,
-        cx: &mut Context<'_>,
+        _cx: &mut Context<'_>,
         packet_type: PacketType,
         seq_number: u16,
         ack_number: u16,
@@ -247,7 +254,8 @@ impl UtpStream {
         #[rustfmt::skip]
         let packet = Packet::new(packet_type, 1, self.connection_id_send(), current_micros(),
                                  0, 0, seq_number, ack_number, extensions, data);
-        let _bytes_sent = ready!(self.socket.poll_send_to(cx, packet, self.remote_addr()))?;
+        // TODO: Error handling?
+        self.socket.send_to(packet, self.remote_addr())?;
         Poll::Ready(Ok(()))
     }
 
@@ -325,8 +333,7 @@ impl AsyncRead for UtpStream {
         // 1. Process as many packets as possible
         while let Poll::Ready(option) = self.poll_read_packet(cx) {
             match option {
-                Some(Ok(packet)) => self.handle_packet(packet),
-                Some(Err(err)) => return Poll::Ready(Err(err)),
+                Some(packet) => self.handle_packet(packet),
                 // Packet stream has terminated, so indicate EOF
                 // TODO: Set a flag on self so we always return this from now on?
                 None => return Poll::Ready(Ok(())),
@@ -398,8 +405,7 @@ impl AsyncWrite for UtpStream {
         // 1. Process as many packets as possible
         while let Poll::Ready(option) = self.poll_read_packet(cx) {
             match option {
-                Some(Ok(packet)) => self.handle_packet(packet),
-                Some(Err(err)) => return Poll::Ready(Err(err)),
+                Some(packet) => self.handle_packet(packet),
                 // Packet stream has terminated, so indicate EOF
                 // TODO: Set a flag on self so we always return this from now on?
                 None => return Poll::Ready(Ok(())),

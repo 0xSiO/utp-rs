@@ -35,7 +35,8 @@ impl UtpListener {
     /// the socket's routing table. If that is successful, a `State` packet will be sent back to
     /// the remote socket and a new stream will be created.
     pub async fn accept(&self) -> Result<UtpStream> {
-        let (packet, remote_addr) = self.socket.get_syn().await?;
+        // TODO: Getting None means the send half of the SYN channel has been dropped
+        let (packet, remote_addr) = self.socket.get_syn().await.unwrap();
         let connection_id_recv = packet.connection_id.wrapping_add(1);
         let connection_id_send = packet.connection_id;
         let seq_number = rand::random::<u16>();
@@ -43,10 +44,9 @@ impl UtpListener {
 
         // state: SYN received
 
-        if self
+        if let Ok(receiver) = self
             .socket
-            .init_connection(connection_id_recv, remote_addr)
-            .is_ok()
+            .insert_connection(connection_id_recv, remote_addr)
         {
             // TODO: Move this into UtpStream functionality
             #[rustfmt::skip]
@@ -55,7 +55,7 @@ impl UtpListener {
                 vec![], Bytes::new(),
             );
             let seq_number = seq_number.wrapping_add(1);
-            self.socket.send_to(syn_ack, remote_addr).await?;
+            self.socket.send_to(syn_ack, remote_addr)?;
 
             // TODO: We aren't technically 'connected' until we start receiving data packets
 
@@ -64,6 +64,7 @@ impl UtpListener {
                 connection_id_recv,
                 connection_id_send,
                 remote_addr,
+                receiver,
                 seq_number,
                 ack_number,
                 Default::default(),
@@ -115,15 +116,18 @@ mod tests {
     #[tokio::test]
     async fn accept_test() {
         let listener = get_listener().await;
-        let receiver = Arc::clone(&listener.socket);
-        let sender = Arc::new(get_socket().await);
+        let local_socket = Arc::clone(&listener.socket);
+        let remote_socket = Arc::new(get_socket().await);
+
+        let (conn_id, mut remote_receiver) =
+            remote_socket.register_connection(local_socket.local_addr());
 
         let mut packet = get_packet();
         packet.packet_type = PacketType::Syn;
+        packet.connection_id = conn_id;
 
-        sender
-            .send_to(packet.clone(), receiver.local_addr())
-            .await
+        remote_socket
+            .send_to(packet.clone(), local_socket.local_addr())
             .unwrap();
 
         let stream = listener.accept().await.unwrap();
@@ -132,14 +136,13 @@ mod tests {
             stream.connection_id_recv(),
             packet.connection_id.wrapping_add(1)
         );
-        assert_eq!(stream.local_addr(), receiver.local_addr());
-        assert_eq!(stream.remote_addr(), sender.local_addr());
+        assert_eq!(stream.local_addr(), local_socket.local_addr());
+        assert_eq!(stream.remote_addr(), remote_socket.local_addr());
 
-        // SYN-ACK should have been sent
-        let (syn_ack, addr) = sender.recv_from().await.unwrap();
+        // SYN-ACK should have been sent to remote socket
+        let syn_ack = remote_receiver.recv().await.unwrap();
         assert_eq!(syn_ack.packet_type, PacketType::State);
         assert_eq!(syn_ack.connection_id, stream.connection_id_send());
         assert_eq!(syn_ack.ack_number, packet.seq_number);
-        assert_eq!(addr, receiver.local_addr());
     }
 }

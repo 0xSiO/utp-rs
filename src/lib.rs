@@ -31,8 +31,7 @@ mod tests {
     use std::sync::Arc;
 
     use bytes::Bytes;
-    use futures_util::{stream::FuturesUnordered, StreamExt, TryStreamExt};
-    use log::*;
+    use futures_util::{stream::FuturesUnordered, StreamExt};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
@@ -104,34 +103,22 @@ mod tests {
                 let connection_id_recv = local_conns[i].connection_id_recv();
                 async move {
                     #[rustfmt::skip]
-                    let result = remote_socket
+                    remote_socket
                         .send_to(
                             Packet::new(PacketType::State, 1, connection_id_recv, 20, 0, 30,
                                         1, 0, vec![], Bytes::new()),
                             local_addr,
                         )
-                        .await;
-                    if result.unwrap() != 20 {
-                        error!("Didn't send 20 bytes");
-                    }
+                        .unwrap();
                 }
             })
             .collect::<FuturesUnordered<_>>();
 
         let recv_tasks = local_conns
             .into_iter()
-            .map(|conn| {
-                let local_socket = Arc::clone(&local_socket);
-                let remote_socket = Arc::clone(&remote_socket);
-                async move {
-                    let packet = local_socket
-                        .packets(conn.connection_id_recv(), remote_socket.local_addr())
-                        .try_next()
-                        .await
-                        .unwrap()
-                        .unwrap();
-                    assert_eq!(packet.connection_id, conn.connection_id_recv());
-                }
+            .map(|mut conn| async move {
+                let packet = conn.inbound_packets().recv().await.unwrap();
+                assert_eq!(packet.connection_id, conn.connection_id_recv());
             })
             .collect::<FuturesUnordered<_>>();
 
