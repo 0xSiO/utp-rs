@@ -13,6 +13,7 @@ mod test_helper;
 
 pub use crate::{listener::UtpListener, socket::UtpSocket, stream::UtpStream};
 
+// TODO: Rewrite this
 // General overview of architecture:
 //
 // A UtpSocket has the ability to send and receive packets through a UDP socket. Incoming

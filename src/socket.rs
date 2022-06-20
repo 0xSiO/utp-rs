@@ -43,6 +43,7 @@ impl UtpSocket {
     }
 
     fn spawn_sender(&self, mut packet_rx: UnboundedReceiver<(Packet, SocketAddr)>) {
+        // TODO: Maybe use a weak reference here
         let socket = Arc::clone(&self.socket);
         let local_addr = self.local_addr;
         tokio::spawn(async move {
@@ -58,6 +59,7 @@ impl UtpSocket {
     }
 
     fn spawn_receiver(&self, syn_tx: UnboundedSender<(Packet, SocketAddr)>) {
+        // TODO: Maybe use a weak reference here
         let socket = Arc::clone(&self.socket);
         let local_addr = self.local_addr;
         let routing_table = Arc::clone(&self.routing_table);
