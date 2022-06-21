@@ -58,11 +58,9 @@ impl UtpSocket {
     }
 
     fn spawn_sender(&self, outgoing_rx: UnboundedReceiver<(Packet, SocketAddr)>) {
-        let socket = Arc::downgrade(&self.socket);
-        let local_addr = self.local_addr;
         tokio::spawn(PacketSender {
-            socket,
-            local_addr,
+            socket: Arc::downgrade(&self.socket),
+            local_addr: self.local_addr,
             outgoing_rx,
             outgoing_buffer: VecDeque::new(),
         });
