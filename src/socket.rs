@@ -8,10 +8,11 @@ use std::{
     task::{Context, Poll},
 };
 
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use dashmap::{mapref::entry::Entry, DashMap};
-use log::{debug, error, trace};
+use log::{debug, error, trace, warn};
 use tokio::{
+    io::ReadBuf,
     net::{ToSocketAddrs, UdpSocket},
     sync::{
         mpsc::{self, UnboundedReceiver, UnboundedSender},
@@ -66,55 +67,12 @@ impl UtpSocket {
         });
     }
 
-    // TODO: What if all strong references to the socket are dropped right before we attempt to
-    //       call recv_from? Will it make this task sleep forever?
     fn spawn_receiver(&self, syn_tx: UnboundedSender<(Packet, SocketAddr)>) {
-        let socket = Arc::downgrade(&self.socket);
-        let local_addr = self.local_addr;
-        let routing_table = Arc::downgrade(&self.routing_table);
-        tokio::spawn(async move {
-            while let Some(socket) = socket.upgrade() {
-                // TODO: Handle other errors in this task. Ignore? Break?
-                while socket.readable().await.is_ok() {
-                    let mut buf = BytesMut::with_capacity(MAX_DATAGRAM_SIZE);
-                    buf.resize(MAX_DATAGRAM_SIZE, 0);
-                    let (bytes_read, remote_addr) = socket.recv_from(&mut buf).await.unwrap();
-                    buf.truncate(bytes_read);
-                    let packet = Packet::try_from(buf.freeze())
-                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
-                        .unwrap();
-
-                    debug!(
-                        "Conn #{}: {} <- {} {:?} ({} bytes)",
-                        packet.connection_id,
-                        local_addr,
-                        remote_addr,
-                        packet.packet_type,
-                        bytes_read
-                    );
-
-                    // Route the packet
-                    if let PacketType::Syn = packet.packet_type {
-                        // TODO: Error means the receiver (and the UtpSocket) has been dropped
-                        syn_tx.send((packet, remote_addr)).unwrap();
-                    } else {
-                        let routing_table = match routing_table.upgrade() {
-                            Some(routing_table) => routing_table,
-                            // Routing table (and thus the socket) has dropped, so shut down
-                            None => break,
-                        };
-
-                        match routing_table.get(&(packet.connection_id, remote_addr)) {
-                            // TODO: Error means the receiver (and the UtpStream) has been dropped
-                            Some(sender) => sender.send(packet).unwrap(),
-                            None => debug!(
-                                "no connections found for packet from {}: {:?}",
-                                remote_addr, packet
-                            ),
-                        };
-                    }
-                }
-            }
+        tokio::spawn(PacketReceiver {
+            socket: Arc::downgrade(&self.socket),
+            local_addr: self.local_addr,
+            syn_tx,
+            routing_table: Arc::downgrade(&self.routing_table),
         });
     }
 
@@ -283,7 +241,7 @@ impl Future for PacketSender {
                 }
                 Poll::Ready(Err(err)) => {
                     // On failure, put the packet back and try again
-                    error!(
+                    warn!(
                         "Conn #{}: {} -> {} {:?} FAILED ({})",
                         packet.connection_id, self.local_addr, remote_addr, packet.packet_type, err
                     );
@@ -311,6 +269,147 @@ impl Future for PacketSender {
         // No more packets to send, so wait for more to be sent through the channel. We're already
         // scheduled for wakeup from calling poll_recv on outgoing_rx earlier.
         Poll::Pending
+    }
+}
+
+struct PacketReceiver {
+    socket: Weak<UdpSocket>,
+    local_addr: SocketAddr,
+    syn_tx: UnboundedSender<(Packet, SocketAddr)>,
+    routing_table: Weak<DashMap<(u16, SocketAddr), UnboundedSender<Packet>>>,
+}
+
+impl Future for PacketReceiver {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // Try to access the socket
+        let socket = match self.socket.upgrade() {
+            Some(socket) => {
+                trace!(
+                    "({} recv task) socket exists, about to read packets",
+                    self.local_addr
+                );
+                socket
+            }
+            // Socket was dropped, so we can shut down.
+            None => {
+                trace!(
+                    "({} recv task) socket dropped, shutting down task",
+                    self.local_addr
+                );
+                return Poll::Ready(());
+            }
+        };
+
+        // Read and process as many packets as possible
+        loop {
+            match socket.poll_recv_ready(cx) {
+                Poll::Ready(Ok(())) => {
+                    let mut buf = [0; MAX_DATAGRAM_SIZE];
+                    let mut buf = ReadBuf::new(&mut buf);
+                    match socket.poll_recv_from(cx, &mut buf) {
+                        Poll::Ready(Ok(remote_addr)) => {
+                            let packet =
+                                match Packet::try_from(Bytes::copy_from_slice(buf.filled())) {
+                                    Ok(packet) => packet,
+                                    Err(err) => {
+                                        warn!(
+                                            "({} recv task) got invalid packet ({}), ignoring",
+                                            self.local_addr, err
+                                        );
+                                        continue;
+                                    }
+                                };
+
+                            // Route the packet
+                            if let PacketType::Syn = packet.packet_type {
+                                // TODO: Error means the receiver (and the UtpSocket) has been dropped
+                                match self.syn_tx.send((packet, remote_addr)) {
+                                    Ok(()) => trace!(
+                                        "({} recv task) saved SYN packet from {}",
+                                        self.local_addr,
+                                        remote_addr
+                                    ),
+                                    // Syn packet receiver (and thus the socket) was dropped, so we can shut down.
+                                    Err(_) => {
+                                        trace!(
+                                            "({} recv task) socket dropped, shutting down task",
+                                            self.local_addr
+                                        );
+                                        return Poll::Ready(());
+                                    }
+                                }
+                            } else {
+                                let routing_table = match self.routing_table.upgrade() {
+                                    Some(routing_table) => routing_table,
+                                    // Routing table (and thus the socket) was dropped, so we can shut down.
+                                    None => {
+                                        trace!(
+                                            "({} recv task) socket dropped, shutting down task",
+                                            self.local_addr
+                                        );
+                                        return Poll::Ready(());
+                                    }
+                                };
+
+                                match routing_table.get(&(packet.connection_id, remote_addr)) {
+                                    Some(sender) => {
+                                        debug!(
+                                            "Conn #{}: {} <- {} {:?} ({} bytes)",
+                                            packet.connection_id,
+                                            self.local_addr,
+                                            remote_addr,
+                                            packet.packet_type,
+                                            buf.filled().len()
+                                        );
+                                        // TODO: Error means the receiver (and the UtpStream) has been dropped
+                                        sender.send(packet).unwrap();
+                                    }
+                                    None => {
+                                        trace!(
+                                            "({} recv task) no connection found for {:?} packet from {}", 
+                                            self.local_addr,
+                                            packet.packet_type,
+                                            remote_addr
+                                        );
+                                    }
+                                };
+                            }
+                        }
+                        Poll::Ready(Err(err)) => {
+                            warn!(
+                                "({} recv task) error reading from socket ({}), retrying",
+                                self.local_addr, err
+                            );
+                            continue;
+                        }
+                        Poll::Pending => {
+                            trace!(
+                                "({} recv task) socket isn't ready, going to sleep",
+                                self.local_addr
+                            );
+                            return Poll::Pending;
+                        }
+                    }
+                }
+                Poll::Ready(Err(err)) => {
+                    error!(
+                        "({} recv task) poll_recv_ready returned error ({}), shutting down",
+                        self.local_addr, err
+                    );
+                    // The IO driver might have terminated, in which case we can't do much else
+                    return Poll::Ready(());
+                }
+                Poll::Pending => {
+                    trace!(
+                        "({} recv task) socket isn't ready, going to sleep",
+                        self.local_addr
+                    );
+                    return Poll::Pending;
+                }
+            }
+        }
     }
 }
 
