@@ -24,32 +24,6 @@ impl Future for PacketSender {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // First, fetch as many packets as possible from the outgoing packet channel
-        while let Poll::Ready(option) = self.outgoing_rx.poll_recv(cx) {
-            match option {
-                Some(item) => self.outgoing_buffer.push_back(item),
-                // If the send half of the outgoing packet channel was dropped, that means
-                // the socket was dropped. If the socket was dropped, we can shut down.
-                None => {
-                    trace!(
-                        "({} send task) socket dropped, shutting down task",
-                        self.local_addr
-                    );
-                    return Poll::Ready(());
-                }
-            }
-        }
-
-        trace!(
-            "({} send task) {} packets in outgoing buffer",
-            self.local_addr,
-            self.outgoing_buffer.len(),
-        );
-
-        // At this point we're scheduled for wakeup once another message shows up in outgoing_rx OR
-        // when the channel is closed.
-
-        // Try to access the socket
         let socket = match self.socket.upgrade() {
             Some(socket) => {
                 trace!(
@@ -67,6 +41,31 @@ impl Future for PacketSender {
                 return Poll::Ready(());
             }
         };
+
+        // Fetch as many packets as possible from the outgoing packet channel
+        while let Poll::Ready(option) = self.outgoing_rx.poll_recv(cx) {
+            match option {
+                Some(item) => self.outgoing_buffer.push_back(item),
+                // If the send half of the outgoing packet channel was dropped, that means
+                // the socket was dropped. If the socket was dropped, we can shut down.
+                None => {
+                    trace!(
+                        "({} send task) socket dropped, shutting down task",
+                        self.local_addr
+                    );
+                    return Poll::Ready(());
+                }
+            }
+        }
+
+        // At this point we're scheduled for wakeup once another message shows up in outgoing_rx OR
+        // when the channel is closed.
+
+        trace!(
+            "({} send task) {} packets in outgoing buffer",
+            self.local_addr,
+            self.outgoing_buffer.len(),
+        );
 
         // Socket is still alive, so send out as many packets as we can
         while let Some((packet, remote_addr)) = self.outgoing_buffer.pop_front() {
