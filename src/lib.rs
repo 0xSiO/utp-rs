@@ -13,19 +13,32 @@ mod test_helper;
 
 pub use crate::{listener::UtpListener, socket::UtpSocket, stream::UtpStream};
 
-// TODO: Rewrite this
 // General overview of architecture:
 //
-// A UtpSocket has the ability to send and receive packets through a UDP socket. Incoming
-// packets are queued and grouped by (connection ID, remote addr) into a routing table.
-// UtpStreams can request packets for a given connection ID, and a UtpListener can request
-// SYN packets from a separate queue in the UtpSocket.
+// A UtpSocket has the ability to send and receive packets through a UDP socket. Any outgoing
+// packets are queued to be sent later in a background IO task. Incoming packets are read by
+// another background IO task, and then grouped by (connection ID, remote addr) to be routed to
+// each connection through an internal routing table. SYN packets are saved in a separate queue, to
+// be read by a UtpListener.
 //
-// Given a UtpSocket, a connection to a remote socket can be created by requesting a new
-// entry in the routing table.
+// A UtpListener waits for incoming SYN packets from the UtpSocket, and attempts to create a
+// UtpStream using the information in the packet.
 //
-// UtpStreams and UtpListeners share ownership of the UtpSocket, so we can have a client
-// configuration, a server configuration, or both configurations at once.
+// A UtpStream represents a connection to a remote peer. It can be created on a given UtpSocket,
+// and has the ability to send data to and receive data from its peer. Connections are registered
+// in the UtpSocket's routing table, where a (connection ID, remote addr) pair maps to the send
+// half of a channel. The UtpStream holds the receive half of the channel (a.k.a. the "mailbox"),
+// allowing it to receive packets asynchronously for that (connection ID, remote addr) pair.
+//
+// When attempting to write data to the UtpStream, the data will be broken into packets and queued
+// to be sent to the peer via one of the UtpSocket's background IO tasks. The stream is not
+// considered flushed until all the sent data has been ACKed by the remote peer.
+//
+// When attempting to read data from the UtpStream, the UtpStream will read and ACK as many packets
+// as it can from its mailbox, then return as much data as it can from the received packets.
+//
+// UtpListeners and UtpStreams can share ownership of a single UtpSocket, so it's possible to have
+// any number of clients and servers all running on the same socket.
 
 #[cfg(test)]
 mod tests {
