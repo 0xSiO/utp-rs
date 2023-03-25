@@ -240,28 +240,24 @@ impl UtpStream {
         }
     }
 
-    // TODO: Convert these to non-poll methods
-    fn poll_send_packet(
+    fn send_packet(
         &self,
-        _cx: &mut Context<'_>,
         packet_type: PacketType,
         seq_number: u16,
         ack_number: u16,
         extensions: Vec<Extension>,
         data: Bytes,
-    ) -> Poll<io::Result<()>> {
+    ) -> io::Result<()> {
         // TODO: Fill out the rest of the packet fields
         #[rustfmt::skip]
         let packet = Packet::new(packet_type, 1, self.connection_id_send(), current_micros(),
                                  0, 0, seq_number, ack_number, extensions, data);
         // TODO: Error handling?
-        self.socket.send_to(packet, self.remote_addr())?;
-        Poll::Ready(Ok(()))
+        self.socket.send_to(packet, self.remote_addr())
     }
 
-    fn poll_send_ack(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.poll_send_packet(
-            cx,
+    fn send_ack(&self) -> io::Result<()> {
+        self.send_packet(
             PacketType::State,
             self.seq_number,
             self.ack_number,
@@ -270,20 +266,19 @@ impl UtpStream {
         )
     }
 
-    fn poll_send_data(&mut self, cx: &mut Context<'_>, data: Bytes) -> Poll<io::Result<()>> {
-        ready!(self.poll_send_packet(
-            cx,
+    fn send_data(&mut self, data: Bytes) -> io::Result<()> {
+        self.send_packet(
             PacketType::Data,
             self.seq_number,
             self.ack_number,
             vec![],
             data.clone(),
-        ))?;
+        )?;
 
         self.unacked_data.push_back((self.seq_number, data));
         self.seq_number = self.seq_number.wrapping_add(1);
         // TODO: Update current window here?
-        Poll::Ready(Ok(()))
+        Ok(())
     }
 }
 
@@ -351,7 +346,7 @@ impl AsyncRead for UtpStream {
         }
 
         // 3. Try sending an ACK for the last packet we got
-        ready!(self.poll_send_ack(cx))?;
+        self.send_ack()?;
 
         // 4. ACK sent, write data to buffer, if any
         if self.received_data.is_empty() {
@@ -377,23 +372,16 @@ impl AsyncRead for UtpStream {
 impl AsyncWrite for UtpStream {
     fn poll_write(
         mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
+        _cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         let mut bytes_written = 0;
 
         // TODO: Don't copy each chunk, use Bytes::split_to to split up the data
         for chunk in buf.chunks(MAX_DATA_SEGMENT_SIZE) {
-            match self.poll_send_data(cx, Bytes::copy_from_slice(chunk)) {
-                Poll::Ready(Ok(_)) => bytes_written += chunk.len(),
-                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
-                Poll::Pending => {
-                    if bytes_written == 0 {
-                        // Don't return Poll::Ready(Ok(0)) yet, we may be writable in the future
-                        return Poll::Pending;
-                    }
-                    break;
-                }
+            match self.send_data(Bytes::copy_from_slice(chunk)) {
+                Ok(_) => bytes_written += chunk.len(),
+                Err(err) => return Poll::Ready(Err(err)),
             }
         }
 
