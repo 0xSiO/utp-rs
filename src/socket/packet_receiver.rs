@@ -65,7 +65,6 @@ impl Future for PacketReceiver {
 
                             // Route the packet
                             if let PacketType::Syn = packet.packet_type {
-                                // TODO: Error means the receiver (and the UtpSocket) has been dropped
                                 match self.syn_tx.send((packet, remote_addr)) {
                                     Ok(()) => trace!(
                                         "({} recv task) saved SYN packet from {}",
@@ -94,28 +93,44 @@ impl Future for PacketReceiver {
                                     }
                                 };
 
-                                match routing_table.get(&(packet.connection_id, remote_addr)) {
-                                    Some(sender) => {
-                                        debug!(
-                                            "Conn #{}: {} <- {} {:?} ({} bytes)",
-                                            packet.connection_id,
-                                            self.local_addr,
-                                            remote_addr,
-                                            packet.packet_type,
-                                            buf.filled().len()
-                                        );
-                                        // TODO: Error means the receiver (and the UtpStream) has been dropped
-                                        sender.send(packet).unwrap();
-                                    }
-                                    None => {
-                                        trace!(
-                                            "({} recv task) no connection found for {:?} packet from {}", 
-                                            self.local_addr,
-                                            packet.packet_type,
-                                            remote_addr
-                                        );
-                                    }
-                                };
+                                let mut found_conn = false;
+                                routing_table.remove_if(
+                                    &(packet.connection_id, remote_addr),
+                                    |_, sender| {
+                                        found_conn = true;
+                                        match sender.send(packet.clone()) {
+                                            Ok(()) => {
+                                                debug!(
+                                                    "Conn #{}: {} <- {} {:?} ({} bytes)",
+                                                    packet.connection_id,
+                                                    self.local_addr,
+                                                    remote_addr,
+                                                    packet.packet_type,
+                                                    buf.filled().len()
+                                                );
+                                                false
+                                            }
+                                            Err(_) => {
+                                                trace!(
+                                                    "({} recv task) dropping stale connection #{} to {}",
+                                                    self.local_addr,
+                                                    packet.connection_id,
+                                                    remote_addr
+                                                );
+                                                true
+                                            }
+                                        }
+                                    },
+                                );
+
+                                if !found_conn {
+                                    trace!(
+                                        "({} recv task) no connection found for {:?} packet from {}", 
+                                        self.local_addr,
+                                        packet.packet_type,
+                                        remote_addr
+                                    );
+                                }
                             }
                         }
                         Poll::Ready(Err(err)) => {
