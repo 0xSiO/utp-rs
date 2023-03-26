@@ -18,7 +18,7 @@ use tokio::{
 
 use crate::{
     congestion::CongestionController,
-    error::*,
+    error::ConnectionError,
     packet::{Extension, Packet, PacketType},
     socket::UtpSocket,
     time::current_micros,
@@ -79,11 +79,14 @@ impl UtpStream {
 
     /// Create a new [`UtpStream`] using the given socket, and attempt to connect the [`UtpStream`]
     /// to the provided address.
-    pub async fn connect(socket: Arc<UtpSocket>, remote_addr: impl ToSocketAddrs) -> Result<Self> {
+    pub async fn connect(
+        socket: Arc<UtpSocket>,
+        remote_addr: impl ToSocketAddrs,
+    ) -> io::Result<Self> {
         let remote_addr = lookup_host(remote_addr)
             .await?
             .next()
-            .ok_or(Error::MissingAddress)?;
+            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, ConnectionError::NoAddress))?;
 
         let (connection_id_recv, mut receiver) = socket.register_connection(remote_addr);
         let connection_id_send = connection_id_recv.wrapping_add(1);

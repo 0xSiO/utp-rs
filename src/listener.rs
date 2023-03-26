@@ -1,10 +1,9 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{io, net::SocketAddr, sync::Arc};
 
 use bytes::Bytes;
 use tokio::net::ToSocketAddrs;
 
 use crate::{
-    error::*,
     packet::{Packet, PacketType},
     socket::UtpSocket,
     stream::UtpStream,
@@ -20,7 +19,7 @@ impl UtpListener {
     }
 
     /// Create a new UtpListener and attempt to bind it to the provided address.
-    pub async fn bind(addr: impl ToSocketAddrs) -> Result<Self> {
+    pub async fn bind(addr: impl ToSocketAddrs) -> io::Result<Self> {
         Ok(Self::new(Arc::new(UtpSocket::bind(addr).await?)))
     }
 
@@ -34,7 +33,7 @@ impl UtpListener {
     /// This will first wait for a `Syn` packet from the socket, then initialize a connection in
     /// the socket's routing table. If that is successful, a `State` packet will be sent back to
     /// the remote socket and a new stream will be created.
-    pub async fn accept(&self) -> Result<UtpStream> {
+    pub async fn accept(&self) -> io::Result<UtpStream> {
         // TODO: Getting None means the send half of the SYN channel has been dropped
         let (packet, remote_addr) = self.socket.get_syn().await.unwrap();
         let connection_id_recv = packet.connection_id.wrapping_add(1);

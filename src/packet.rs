@@ -2,7 +2,7 @@ use std::convert::TryFrom;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
-use crate::error::*;
+use crate::error::PacketParseError;
 
 /// See https://www.bittorrent.org/beps/bep_0029.html#header-format
 pub(crate) const PACKET_HEADER_LEN: usize = 20;
@@ -19,16 +19,16 @@ pub(crate) enum PacketType {
 }
 
 impl TryFrom<u8> for PacketType {
-    type Error = Error;
+    type Error = PacketParseError;
 
-    fn try_from(value: u8) -> Result<Self> {
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(PacketType::Data),
             1 => Ok(PacketType::Fin),
             2 => Ok(PacketType::State),
             3 => Ok(PacketType::Reset),
             4 => Ok(PacketType::Syn),
-            n => Err(PacketParseError::InvalidPacketType(n).into()),
+            n => Err(PacketParseError::InvalidPacketType(n)),
         }
     }
 }
@@ -169,11 +169,11 @@ impl From<Packet> for Bytes {
 }
 
 impl TryFrom<Bytes> for Packet {
-    type Error = Error;
+    type Error = PacketParseError;
 
-    fn try_from(mut bytes: Bytes) -> Result<Self> {
+    fn try_from(mut bytes: Bytes) -> Result<Self, Self::Error> {
         if bytes.len() < PACKET_HEADER_LEN {
-            return Err(PacketParseError::TooSmall.into());
+            return Err(PacketParseError::TooSmall);
         }
 
         let type_and_version = bytes.get_u8();
@@ -181,7 +181,7 @@ impl TryFrom<Bytes> for Packet {
 
         let version = match type_and_version & 0x0F {
             1 => 1,
-            v => return Err(PacketParseError::UnsupportedVersion(v).into()),
+            v => return Err(PacketParseError::UnsupportedVersion(v)),
         };
 
         let first_extension_type = bytes.get_u8();
@@ -204,7 +204,7 @@ impl TryFrom<Bytes> for Packet {
             if bytes.has_remaining() {
                 bytes.get_u8()
             } else {
-                return Err(PacketParseError::MissingExtension(0).into());
+                return Err(PacketParseError::MissingExtension(0));
             }
         } else {
             0
@@ -219,7 +219,7 @@ impl TryFrom<Bytes> for Packet {
                     // of 2 or 3, so this apparently isn't enforced.
 
                     if !bytes.has_remaining() {
-                        return Err(PacketParseError::MissingExtension(extension_number).into());
+                        return Err(PacketParseError::MissingExtension(extension_number));
                     }
 
                     let length = bytes.get_u8() as usize;
@@ -229,8 +229,7 @@ impl TryFrom<Bytes> for Packet {
                             index: extension_number,
                             length,
                             remaining: bytes.remaining(),
-                        }
-                        .into());
+                        });
                     }
 
                     let extension_data = bytes.split_to(length);

@@ -2,21 +2,14 @@ use std::net::SocketAddr;
 
 use thiserror::Error;
 
-pub type Result<T> = std::result::Result<T, Error>;
-
 #[derive(Debug, Error)]
-pub enum Error {
-    #[error("can't find socket address")]
-    MissingAddress,
+pub enum ConnectionError {
+    #[error("no socket address provided")]
+    NoAddress,
     #[error("too many connections. limit: {}", u16::MAX)]
-    TooManyConnections,
+    TooMany,
     #[error("connection to {1} with id {0} already exists")]
-    ConnectionExists(u16, SocketAddr),
-    #[error(transparent)]
-    // TODO: Could this be replaced with an io::Error with kind io::ErrorKind::InvalidData?
-    PacketParseError(#[from] PacketParseError),
-    #[error(transparent)]
-    IOError(#[from] std::io::Error),
+    AlreadyExists(u16, SocketAddr),
 }
 
 #[derive(Debug, Error)]

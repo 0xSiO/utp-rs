@@ -10,7 +10,7 @@ use tokio::{
     },
 };
 
-use crate::{error::*, packet::Packet};
+use crate::{error::ConnectionError, packet::Packet};
 
 mod packet_receiver;
 mod packet_sender;
@@ -114,7 +114,7 @@ impl UtpSocket {
         match self.routing_table.entry((connection_id, remote_addr)) {
             Entry::Occupied(_) => Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
-                Error::ConnectionExists(connection_id, remote_addr),
+                ConnectionError::AlreadyExists(connection_id, remote_addr),
             )),
             vacant => {
                 let (packet_tx, packet_rx) = mpsc::unbounded_channel();
