@@ -46,10 +46,10 @@ pub struct UtpStream {
     received_data: BytesMut,
     /// Queue for in-flight data (sent but unACKed). Elements are (seq_number, data)
     unacked_data: VecDeque<(u16, Bytes)>,
+    is_shutdown: bool,
 }
 
 impl UtpStream {
-    // TODO: Remove this?
     pub(crate) fn new(
         socket: Arc<UtpSocket>,
         connection_id_recv: u16,
@@ -74,6 +74,7 @@ impl UtpStream {
             inbound_data,
             received_data,
             unacked_data,
+            is_shutdown: false,
         }
     }
 
@@ -151,23 +152,26 @@ impl UtpStream {
         &mut self.inbound_packets
     }
 
+    /// Attempt to read a packet from the inbound packet channel. If this returns
+    /// Poll::Ready(None), the stream has been shut down.
     fn poll_read_packet(&mut self, cx: &mut Context<'_>) -> Poll<Option<Packet>> {
         loop {
-            // If this is None, the sender half has been dropped, i.e. the connection has been
-            // removed from the socket routing table. TODO: What do?
             let maybe_packet = ready!(self.inbound_packets.poll_recv(cx));
 
-            if let Some(ref packet) = maybe_packet {
-                // We want to create this timestamp as close to receipt time as possible
-                let received_at = current_micros();
+            match maybe_packet {
+                Some(ref packet) => {
+                    // We want to create this timestamp as close to receipt time as possible
+                    let received_at = current_micros();
 
-                // Just ignore the packet if it's suspicious
-                // TODO: Maybe close the connection after a certain number of suspicious packets
-                if self.is_suspicious(packet) {
-                    continue;
+                    // Just ignore the packet if it's suspicious
+                    // TODO: Maybe close the connection after a certain number of suspicious packets
+                    if self.is_suspicious(packet) {
+                        continue;
+                    }
+
+                    self.congestion_controller.update_state(received_at, packet);
                 }
-
-                self.congestion_controller.update_state(received_at, packet);
+                None => self.is_shutdown = true,
             }
 
             return Poll::Ready(maybe_packet);
@@ -333,7 +337,6 @@ impl AsyncRead for UtpStream {
             match option {
                 Some(packet) => self.handle_packet(packet),
                 // Packet stream has terminated, so indicate EOF
-                // TODO: Set a flag on self so we always return this from now on?
                 None => return Poll::Ready(Ok(())),
             }
         }
@@ -378,10 +381,13 @@ impl AsyncWrite for UtpStream {
         _cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        let mut bytes_written = 0;
+        if self.is_shutdown {
+            return Poll::Ready(Ok(0));
+        }
 
-        // TODO: Don't copy each chunk, use Bytes::split_to to split up the data
+        let mut bytes_written = 0;
         for chunk in buf.chunks(MAX_DATA_SEGMENT_SIZE) {
+            // TODO: Don't copy each chunk, use Bytes::split_to to split up the data
             match self.send_data(Bytes::copy_from_slice(chunk)) {
                 Ok(_) => bytes_written += chunk.len(),
                 Err(err) => return Poll::Ready(Err(err)),
@@ -397,24 +403,28 @@ impl AsyncWrite for UtpStream {
         while let Poll::Ready(option) = self.poll_read_packet(cx) {
             match option {
                 Some(packet) => self.handle_packet(packet),
-                // Packet stream has terminated, so indicate EOF
-                // TODO: Set a flag on self so we always return this from now on?
-                None => return Poll::Ready(Ok(())),
+                // Packet stream has terminated
+                None => break,
             }
         }
 
         // 2. Return if there's no more unACKed data
         if self.unacked_data.is_empty() {
             Poll::Ready(Ok(()))
+        } else if self.is_shutdown {
+            // TODO: Return an error since we have unACKed data
+            todo!()
         } else {
             Poll::Pending
         }
     }
 
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.is_shutdown = true;
         ready!(self.poll_flush(cx))?;
-        // TODO: We could set a shutdown flag on UtpStream and return Ok(0) for any future calls to
-        //       poll_write, effectively preventing any more packets from being sent
+        // TODO: Send RESET packet to peer, close self.inbound_packets. May need a poll_flush_priv
+        //       method so self is not consumed
+        // self.inbound_packets.close();
         todo!()
     }
 }
