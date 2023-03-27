@@ -422,8 +422,8 @@ impl AsyncWrite for UtpStream {
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         self.is_shutdown = true;
         ready!(self.poll_flush(cx))?;
-        // TODO: Send RESET packet to peer, close self.inbound_packets. May need a poll_flush_priv
-        //       method so self is not consumed
+        // TODO: Close self.inbound_packets. May need a poll_flush_priv method so self is not
+        //       consumed
         // self.inbound_packets.close();
         todo!()
     }

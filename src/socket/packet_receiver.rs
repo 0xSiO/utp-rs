@@ -131,6 +131,10 @@ impl Future for PacketReceiver {
                                         remote_addr
                                     );
                                 }
+
+                                // TODO: Maybe send RESET packet if stale connection or no
+                                // connection. Explore this a bit to make sure we don't interfere
+                                // with any healthy connections
                             }
                         }
                         Poll::Ready(Err(err)) => {
