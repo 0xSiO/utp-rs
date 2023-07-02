@@ -9,11 +9,11 @@ bytes = "1.4.0"
 dashmap = "5.4.0"
 futures-util = "0.3.0"
 log = "0.4.0"
-thiserror = "1.0.0"
-tokio = { version = "1.26.0", features = ["net", "rt", "sync"] }
 rand = "0.8.0"
+thiserror = "1.0.0"
+tokio = { version = "1.29.0", features = ["net", "rt", "sync"] }
 
 [dev-dependencies]
 futures-util = { version = "0.3.0" }
-pretty_env_logger = "0.4.0"
-tokio = { version = "1.26.0", features = ["io-util", "macros", "rt-multi-thread"] }
+pretty_env_logger = "0.5.0"
+tokio = { version = "1.29.0", features = ["io-util", "macros", "rt-multi-thread"] }

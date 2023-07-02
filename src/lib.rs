@@ -97,7 +97,7 @@ mod tests {
         let remote_socket = get_socket().await;
 
         // Make this smaller if your operating system doesn't have large enough socket buffers
-        const MAX_CONNS: usize = 250;
+        const MAX_CONNS: usize = 200;
 
         let local_conns = (0..MAX_CONNS)
             .map(|_| {
