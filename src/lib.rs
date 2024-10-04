@@ -1,5 +1,3 @@
-#![warn(rust_2018_idioms)]
-
 mod congestion;
 pub mod error;
 mod listener;

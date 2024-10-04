@@ -6,15 +6,15 @@ edition = "2021"
 publish = false
 
 [dependencies]
-bytes = "1.4.0"
-dashmap = "5.4.0"
-futures-util = "0.3.0"
-log = "0.4.0"
-rand = "0.8.0"
-thiserror = "1.0.0"
-tokio = { version = "1.29.0", features = ["net", "rt", "sync"] }
+bytes = "1"
+dashmap = "6"
+futures-util = "0.3"
+log = "0.4"
+rand = "0.8"
+thiserror = "1"
+tokio = { version = "1", features = ["net", "rt", "sync"] }
 
 [dev-dependencies]
-futures-util = { version = "0.3.0" }
-pretty_env_logger = "0.5.0"
-tokio = { version = "1.29.0", features = ["io-util", "macros", "rt-multi-thread"] }
+futures-util = { version = "0.3" }
+pretty_env_logger = "0.5"
+tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread"] }
